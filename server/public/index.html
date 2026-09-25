@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenSteamTool - Core CDKey & Reseller Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- LOGIN SCREEN -->
+  <div id="login-screen" class="login-wrapper">
+    <div class="login-bg-shapes">
+      <div class="shape shape-1"></div>
+      <div class="shape shape-2"></div>
+    </div>
+    <div class="glass-card login-card">
+      <div class="brand-header">
+        <div class="brand-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        </div>
+        <div>
+          <h2>OpenSteamTool</h2>
+          <p>CDKey & Reseller Portal</p>
+        </div>
+      </div>
+      <form id="login-form">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" class="form-control" placeholder="Enter your username" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" class="form-control" placeholder="Enter your password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="login-btn">
+          <span>Sign In to Dashboard</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+        </button>
+      </form>
+      <div class="login-footer">
+        <span class="badge badge-subtle">Default Admin: admin / admin123456</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD WRAPPER -->
+  <div id="dashboard-wrapper" class="dashboard-wrapper hidden">
+    <!-- TOP NAVIGATION -->
+    <header class="top-nav">
+      <div class="nav-left">
+        <div class="brand-logo">
+          <div class="brand-icon-sm">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          </div>
+          <span class="brand-title">OST Core Server</span>
+        </div>
+        <nav class="nav-tabs">
+          <button class="nav-tab active" data-tab="overview">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            <span>Overview</span>
+          </button>
+          <button class="nav-tab" data-tab="generator">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><key x1="21" y1="2" x2="12" y2="11"></key><path d="M15.5 8.5L14 10l-2-2 1.5-1.5a4.5 4.5 0 1 1 6.36 6.36L18 14.5l-2-2 1.5-1.5"></path><circle cx="7.5" cy="16.5" r="4.5"></circle></svg>
+            <span>Key Generator</span>
+          </button>
+          <button class="nav-tab" data-tab="keys">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            <span>Keys Manager</span>
+          </button>
+          <button class="nav-tab admin-only hidden" data-tab="resellers">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            <span>Resellers</span>
+          </button>
+          <button class="nav-tab admin-only hidden" data-tab="activations">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            <span>Activations Audit</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="nav-right">
+        <div class="user-credit-pill">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M15 9.5H9.5a2.5 2.5 0 0 1 0-5H14.5M9.5 14.5h5a2.5 2.5 0 0 1 0 5H9"></path></svg>
+          <span class="label">Credits:</span>
+          <span id="nav-user-credits" class="value">0.00</span>
+        </div>
+        <div class="user-profile-badge">
+          <span id="nav-username" class="username">Admin</span>
+          <span id="nav-role-badge" class="badge badge-admin">ADMIN</span>
+        </div>
+        <button id="logout-btn" class="btn btn-icon btn-ghost" title="Logout">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT VIEW CONTAINER -->
+    <main class="content-container">
+      
+      <!-- TAB 1: OVERVIEW -->
+      <div id="tab-overview" class="tab-content active">
+        <div class="content-header">
+          <div>
+            <h1>Dashboard Overview</h1>
+            <p>Real-time analytics, key metrics, and key activation activity.</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-primary switch-tab-btn" data-target="generator">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <span>Generate CDKeys</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- STAT CARDS GRID -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon icon-purple">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-label">Total CDKeys</span>
+              <h3 id="stat-total-keys">0</h3>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon icon-green">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-label">Active (Unused) Keys</span>
+              <h3 id="stat-active-keys">0</h3>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon icon-amber">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-label">Activated Keys</span>
+              <h3 id="stat-used-keys">0</h3>
+            </div>
+          </div>
+
+          <div class="stat-card admin-only">
+            <div class="stat-icon icon-blue">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-label">Active Resellers</span>
+              <h3 id="stat-total-resellers">0</h3>
+            </div>
+          </div>
+        </div>
+
+        <!-- RECENT ACTIVATIONS SECTION -->
+        <div class="section-card mt-4">
+          <div class="section-card-header">
+            <h3>Recent Steam Activations</h3>
+            <span class="badge badge-subtle">Live Updates</span>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>CDKey</th>
+                  <th>SteamID32 / AccountID</th>
+                  <th>AppID(s) Included</th>
+                  <th>Reseller / Creator</th>
+                  <th>Activated Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="overview-activations-tbody">
+                <tr>
+                  <td colspan="5" class="text-center text-muted">No activations recorded yet</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: KEY GENERATOR -->
+      <div id="tab-generator" class="tab-content">
+        <div class="content-header">
+          <div>
+            <h1>CDKey Generator</h1>
+            <p>Generate CDKeys for specific Steam AppIDs. Cost will be deducted from reseller balance.</p>
+          </div>
+        </div>
+
+        <div class="grid-2col">
+          <!-- GENERATOR FORM -->
+          <div class="glass-card">
+            <h3>Key Configuration</h3>
+            <form id="generator-form">
+              <div class="form-group">
+                <label for="gen-appids">AppID(s)</label>
+                <input type="text" id="gen-appids" class="form-control" placeholder="e.g. 1245620 or 1245620, 1086940" required>
+                <small class="form-hint">Enter single AppID or comma-separated list of AppIDs to bundle in key.</small>
+              </div>
+
+              <div class="form-group">
+                <label for="gen-quantity">Quantity (Keys to Generate)</label>
+                <input type="number" id="gen-quantity" class="form-control" value="1" min="1" max="100" required>
+              </div>
+
+              <div class="form-group">
+                <label for="gen-cost">Credit Cost Per Key</label>
+                <input type="number" id="gen-cost" class="form-control" value="1.0" step="0.1" min="0" required>
+              </div>
+
+              <div class="summary-box">
+                <div class="summary-row">
+                  <span>Quantity:</span>
+                  <strong id="calc-qty">1</strong>
+                </div>
+                <div class="summary-row">
+                  <span>Cost per Key:</span>
+                  <strong id="calc-cost">1.00 credits</strong>
+                </div>
+                <div class="summary-row total">
+                  <span>Total Deducted Credits:</span>
+                  <strong id="calc-total" class="text-accent">1.00 credits</strong>
+                </div>
+              </div>
+
+              <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-generate-submit">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                <span>Generate CDKey(s) Now</span>
+              </button>
+            </form>
+          </div>
+
+          <!-- GENERATED KEYS RESULTS -->
+          <div class="glass-card flex-column">
+            <div class="flex-between align-center mb-3">
+              <h3>Generated Results</h3>
+              <div class="btn-group">
+                <button id="btn-copy-raw" class="btn btn-sm btn-secondary" disabled>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy Keys</span>
+                </button>
+                <button id="btn-copy-protocol" class="btn btn-sm btn-outline" disabled>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                  <span>Copy Direct Links</span>
+                </button>
+              </div>
+            </div>
+
+            <textarea id="gen-output-textarea" class="code-output flex-1" placeholder="Generated keys will appear here..." readonly></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: KEYS MANAGER -->
+      <div id="tab-keys" class="tab-content">
+        <div class="content-header">
+          <div>
+            <h1>Keys Manager</h1>
+            <p>View, filter, and track all generated keys and activation statuses.</p>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <div class="search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="keys-search-input" class="form-control" placeholder="Search CDKey, AppID, SteamID...">
+          </div>
+          <div class="filter-controls">
+            <select id="keys-status-filter" class="form-control">
+              <option value="all">All Statuses</option>
+              <option value="active">Active (Unused)</option>
+              <option value="used">Activated (Used)</option>
+            </select>
+            <button id="btn-refresh-keys" class="btn btn-secondary">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              <span>Refresh</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="section-card mt-3">
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>CDKey</th>
+                  <th>AppID(s)</th>
+                  <th>Status</th>
+                  <th>Creator / Reseller</th>
+                  <th>Created At</th>
+                  <th>Activated By (SteamID32)</th>
+                  <th>Activated At</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="keys-table-tbody">
+                <tr><td colspan="8" class="text-center text-muted">Loading keys...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: RESELLERS (ADMIN ONLY) -->
+      <div id="tab-resellers" class="tab-content admin-only">
+        <div class="content-header">
+          <div>
+            <h1>Resellers Management</h1>
+            <p>Create reseller accounts, top up credit balances, and monitor reseller performance.</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-primary" id="btn-open-create-reseller-modal">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <span>Add New Reseller</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Username</th>
+                  <th>Credit Balance</th>
+                  <th>Keys Generated</th>
+                  <th>Keys Activated</th>
+                  <th>Created Date</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="resellers-table-tbody">
+                <tr><td colspan="7" class="text-center text-muted">Loading resellers...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 5: ACTIVATIONS AUDIT (ADMIN ONLY) -->
+      <div id="tab-activations" class="tab-content admin-only">
+        <div class="content-header">
+          <div>
+            <h1>SteamID Activation Tracking Log</h1>
+            <p>Comprehensive record of all SteamID activations and bound AppIDs.</p>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Log ID</th>
+                  <th>Activated CDKey</th>
+                  <th>SteamID32 / AccountID</th>
+                  <th>AppID(s) Granted</th>
+                  <th>IP Address</th>
+                  <th>Reseller / Source</th>
+                  <th>Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="activations-table-tbody">
+                <tr><td colspan="7" class="text-center text-muted">Loading activation logs...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- MODAL: CREATE RESELLER -->
+  <div id="modal-create-reseller" class="modal-overlay hidden">
+    <div class="modal-card glass-card">
+      <div class="modal-header">
+        <h3>Create New Reseller Account</h3>
+        <button class="modal-close modal-close-btn">&times;</button>
+      </div>
+      <form id="form-create-reseller">
+        <div class="form-group">
+          <label for="reseller-username">Reseller Username</label>
+          <input type="text" id="reseller-username" class="form-control" placeholder="e.g. reseller_john" required>
+        </div>
+        <div class="form-group">
+          <label for="reseller-password">Password</label>
+          <input type="password" id="reseller-password" class="form-control" placeholder="Set password" required>
+        </div>
+        <div class="form-group">
+          <label for="reseller-initial-credits">Initial Topup Credits</label>
+          <input type="number" id="reseller-initial-credits" class="form-control" value="100.0" step="1.0" min="0">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Account</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: TOP UP CREDITS -->
+  <div id="modal-topup" class="modal-overlay hidden">
+    <div class="modal-card glass-card">
+      <div class="modal-header">
+        <h3>Topup Reseller Credits</h3>
+        <button class="modal-close modal-close-btn">&times;</button>
+      </div>
+      <form id="form-topup">
+        <input type="hidden" id="topup-reseller-id">
+        <div class="form-group">
+          <label>Reseller Account</label>
+          <input type="text" id="topup-reseller-name" class="form-control" readonly>
+        </div>
+        <div class="form-group">
+          <label for="topup-amount">Credit Amount to Add</label>
+          <input type="number" id="topup-amount" class="form-control" placeholder="e.g. 50.00" step="1.0" min="1" required>
+        </div>
+        <div class="form-group">
+          <label for="topup-note">Note / Remark</label>
+          <input type="text" id="topup-note" class="form-control" placeholder="e.g. Payment received via Crypto / Bank Transfer">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary modal-close-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Confirm Topup</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
