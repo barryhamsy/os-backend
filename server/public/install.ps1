@@ -11,8 +11,10 @@
         irm https://YOUR-SERVER/install.ps1 | iex
 #>
 
-# Set this to wherever you host THIS script, so it can relaunch itself elevated.
-$ScriptUrl = 'https://onennabe.duckdns.org/install.ps1'
+# Where to re-fetch this script from when relaunching elevated.
+# The server returns this script at the root URL when the request comes from
+# PowerShell, so the short "irm onennabe.duckdns.org | iex" works too.
+$ScriptUrl = 'https://onennabe.duckdns.org'
 
 # Source of the payload (a public GitHub repo). The script downloads the repo
 # zip and copies its "installation" folder into Steam.

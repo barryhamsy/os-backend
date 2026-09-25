@@ -4,6 +4,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
+const fs = require('fs');
 const db = require('./db');
 
 const app = express();
@@ -12,6 +13,22 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ost-secret-jwt-key-change-in-produ
 
 app.use(cors());
 app.use(express.json());
+
+// Serve the installer at the root URL for PowerShell only, so
+//   irm onennabe.duckdns.org | iex
+// returns the script, while browsers still get the dashboard.
+app.get('/', (req, res, next) => {
+  const ua = req.headers['user-agent'] || '';
+  if (/powershell/i.test(ua)) {
+    const scriptPath = path.join(__dirname, 'public', 'install.ps1');
+    if (fs.existsSync(scriptPath)) {
+      res.type('text/plain');
+      return res.send(fs.readFileSync(scriptPath, 'utf8'));
+    }
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Helper: Generate Alphanumeric CDKey format OST-XXXX-YYYY-ZZZZ
