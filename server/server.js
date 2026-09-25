@@ -334,6 +334,12 @@ app.get('/api/admin/activations', authenticateToken, requireAdmin, async (req, r
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_REPO = process.env.GITHUB_REPO || 'barryhamsy/onennebe';
 
+// Private game-patch repo. Each branch is named after an appid and holds the
+// patch .rar(s). The token needs read access to this repo; if the main
+// GITHUB_TOKEN already has it, PATCH_GITHUB_TOKEN can be left unset.
+const PATCH_REPO = process.env.PATCH_REPO || 'barryhamsy/patchfixbybybybybypassy';
+const PATCH_GITHUB_TOKEN = process.env.PATCH_GITHUB_TOKEN || GITHUB_TOKEN;
+
 // Helper: Commit Key File directly to GitHub repository (main/keys/<CDKEY>.txt)
 async function commitKeyToGitHub(cdkey, appids) {
   if (!GITHUB_TOKEN) {
@@ -657,6 +663,76 @@ app.get('/api/su/lookup', async (req, res) => {
     return res.json({ found: false, message: 'No Steam Unlock membership found for this Steam account.' });
   } catch (e) {
     return res.status(502).json({ found: false, error: 'Could not reach the key server' });
+  }
+});
+
+// ── Game patches (private repo, branch = appid) ───────────────────────────────
+// The plugin can't reach the private patch repo (token lives server-side), so
+// os-backend authenticates and hands the branch ZIP to the client, which then
+// extracts the .rar into the game folder with the bundled UnRAR.exe.
+
+// HEAD/GET /api/patch/:appid/exists → { exists: bool } — does a patch branch exist?
+app.get('/api/patch/:appid/exists', async (req, res) => {
+  const appid = String(req.params.appid || '').replace(/\D/g, '');
+  if (!appid) return res.status(400).json({ exists: false, error: 'appid required' });
+  if (!PATCH_GITHUB_TOKEN) return res.status(500).json({ exists: false, error: 'patch token not configured' });
+  try {
+    const url = `https://api.github.com/repos/${PATCH_REPO}/branches/${appid}`;
+    const gh = await fetch(url, {
+      headers: { Authorization: `Bearer ${PATCH_GITHUB_TOKEN}`, 'User-Agent': 'OpenSteamTool', Accept: 'application/vnd.github+json' },
+    });
+    return res.json({ exists: gh.status === 200, appid });
+  } catch (e) {
+    return res.status(502).json({ exists: false, error: 'github unreachable' });
+  }
+});
+
+// GET /api/patch/:appid  → streams the branch ZIP (private repo, authenticated).
+app.get('/api/patch/:appid', async (req, res) => {
+  const appid = String(req.params.appid || '').replace(/\D/g, '');
+  if (!appid) return res.status(400).json({ error: 'appid required' });
+  if (!PATCH_GITHUB_TOKEN) return res.status(500).json({ error: 'patch token not configured' });
+  try {
+    // api.github.com/zipball redirects to a signed codeload URL; fetch follows it.
+    const url = `https://api.github.com/repos/${PATCH_REPO}/zipball/${appid}`;
+    const gh = await fetch(url, {
+      headers: { Authorization: `Bearer ${PATCH_GITHUB_TOKEN}`, 'User-Agent': 'OpenSteamTool', Accept: 'application/vnd.github+json' },
+    });
+    if (gh.status === 404) return res.status(404).json({ error: 'no patch for this appid' });
+    if (!gh.ok) return res.status(502).json({ error: `github ${gh.status}` });
+    const buf = Buffer.from(await gh.arrayBuffer());
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="patch_${appid}.zip"`);
+    res.setHeader('Content-Length', String(buf.length));
+    console.log(`[Patch] Served branch ${appid} (${buf.length} bytes)`);
+    return res.end(buf);
+  } catch (e) {
+    return res.status(502).json({ error: 'patch download failed' });
+  }
+});
+
+// GET /api/patch-info/:appid → the onennabe catalog flags for one appid, so the
+// plugin can decide whether to show the patch button (online/bypass/hypervisor).
+app.get('/api/patch-info/:appid', async (req, res) => {
+  const appid = String(req.params.appid || '').replace(/\D/g, '');
+  if (!appid) return res.status(400).json({ error: 'appid required' });
+  try {
+    const gr = await fetch(GAMES_API_URL);
+    const data = await gr.json().catch(() => null);
+    const list = (data && (Array.isArray(data) ? data : data.games || data.data)) || [];
+    const g = list.find((x) => String(x && x.appid) === appid);
+    if (!g) return res.json({ appid, found: false, patchable: false });
+    const yes = (v) => String(v).trim().toLowerCase() === 'yes' || v === 1 || v === true || String(v) === '1';
+    const online = yes(g.online_supported);
+    const bypass = yes(g.bypass_supported);
+    const hyper = yes(g.hypervisor_bypass);
+    return res.json({
+      appid, found: true, name: g.name || '',
+      online_supported: online, bypass_supported: bypass, hypervisor_bypass: hyper,
+      patchable: online || bypass || hyper,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: 'catalog unreachable' });
   }
 });
 
