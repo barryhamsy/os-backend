@@ -565,32 +565,49 @@ app.get('/api/entitlements/:steamid', async (req, res) => {
   }
 });
 
-// Steam Unlock membership: record a game unlock. Validates the CDKEY at
-// steamunlockonennabe, then appends the AppID to users/<steamid64>.json.
+// Steam Unlock membership. Validation lives at steamunlockonennabe; the plugin's
+// Lua backend can only reliably send GET query params (not POST bodies), so these
+// are GET endpoints and os-backend does the proper server-to-server POST.
 const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonennabe.duckdns.org/validate-onennabe-cdkey';
-app.post('/api/su/unlock', async (req, res) => {
+
+// Server-to-server: ask steamunlockonennabe whether a CD key is valid.
+async function suValidate(cd) {
+  const vr = await fetch(SU_VALIDATE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cd_key: cd }),
+  });
+  return await vr.json().catch(() => null);
+}
+
+// GET /api/su/validate?cd_key=...  → passes steamunlockonennabe's result through.
+app.get('/api/su/validate', async (req, res) => {
+  const cd = String(req.query.cd_key || '').trim();
+  if (!cd) return res.status(400).json({ status: 'error', message: 'cd_key required' });
   try {
-    const { cd_key, steamid, appid } = req.body || {};
-    const cd = String(cd_key || '').trim();
-    let sid = String(steamid || '').trim();
-    const appId = String(appid || '').replace(/\D/g, '');
+    const vd = await suValidate(cd);
+    if (!vd) return res.status(502).json({ status: 'error', message: 'Validation server error' });
+    return res.json(vd);
+  } catch (e) {
+    return res.status(502).json({ status: 'error', message: 'Could not reach validation server' });
+  }
+});
+
+// Shared unlock handler (GET query or POST body).
+async function suUnlock(params, res) {
+  try {
+    const cd = String(params.cd_key || '').trim();
+    let sid = String(params.steamid || '').trim();
+    const appId = String(params.appid || '').replace(/\D/g, '');
     if (!cd || !sid || !appId) {
       return res.status(400).json({ success: false, error: 'cd_key, steamid and appid are required' });
     }
     sid = toSteamId64(sid); // membership entitlements are keyed by SteamID64
 
-    // 1. Validate the membership (steamunlockonennabe is the source of truth).
+    // 1. Validate the membership.
     let vd = null;
-    try {
-      const vr = await fetch(SU_VALIDATE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cd_key: cd }),
-      });
-      vd = await vr.json().catch(() => null);
-    } catch (e) {
-      return res.status(502).json({ success: false, error: 'Could not validate membership' });
-    }
+    try { vd = await suValidate(cd); }
+    catch (e) { return res.status(502).json({ success: false, error: 'Could not validate membership' }); }
     if (!vd || vd.status !== 'success') {
       return res.status(403).json({ success: false, error: (vd && vd.message) || 'Membership not active' });
     }
@@ -611,7 +628,9 @@ app.post('/api/su/unlock', async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
-});
+}
+app.get('/api/su/unlock', (req, res) => suUnlock(req.query, res));
+app.post('/api/su/unlock', (req, res) => suUnlock(req.body, res));
 
 // Revoke CDKey: removes the key (active or activated), deletes it from GitHub,
 // and refunds its cost to the reseller who generated it.
