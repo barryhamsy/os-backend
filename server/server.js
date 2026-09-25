@@ -586,6 +586,57 @@ async function suValidate(cd, sid) {
   return await vr.json().catch(() => null);
 }
 
+// Full key list (server-side only). Used to look up an existing user's own key
+// for one-click re-activation. We NEVER expose this whole list to a client — the
+// lookup endpoint below returns only the requesting SteamID's own key.
+const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duckdns.org/api/view-onennabe-cdkeys';
+
+function suTodayStr() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+}
+
+// GET /api/su/lookup?steamid=...
+// One-click activation for existing users: finds a key this SteamID has already
+// activated and returns ONLY that user's own key (never anyone else's).
+app.get('/api/su/lookup', async (req, res) => {
+  const sidIn = String(req.query.steamid || '').trim();
+  if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
+  const sid64 = toSteamId64(sidIn);
+  try {
+    const vr = await fetch(SU_VIEW_URL);
+    const data = await vr.json().catch(() => null);
+    const keys = (data && Array.isArray(data.keys)) ? data.keys : [];
+    const today = suTodayStr();
+
+    // Every key this SteamID has activated.
+    const matches = [];
+    for (const k of keys) {
+      const ids = Array.isArray(k.steamids) ? k.steamids : [];
+      const hit = ids.some((s) => String(s && s.steamid) === sid64);
+      if (!hit) continue;
+      const exp = String(k.expiry_date || '');
+      // YYYY-MM-DD compares correctly as a string. Treat "no expiry" as active.
+      const expired = exp ? (exp < today) : false;
+      matches.push({ cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '', expired });
+    }
+
+    // Prefer a still-valid key with the furthest-out expiry.
+    const active = matches
+      .filter((m) => !m.expired)
+      .sort((a, b) => (String(a.expiry_date) < String(b.expiry_date) ? 1 : -1));
+    if (active.length) {
+      const m = active[0];
+      return res.json({ found: true, cd_key: m.cd_key, expiry_date: m.expiry_date, key_type: m.key_type });
+    }
+    if (matches.length) {
+      return res.json({ found: false, expired: true, message: 'Your Steam Unlock membership has expired.' });
+    }
+    return res.json({ found: false, message: 'No Steam Unlock membership found for this Steam account.' });
+  } catch (e) {
+    return res.status(502).json({ found: false, error: 'Could not reach the key server' });
+  }
+});
+
 // GET /api/su/validate?cd_key=...&steamid=...  → passes the result through.
 app.get('/api/su/validate', async (req, res) => {
   const cd = String(req.query.cd_key || '').trim();
