@@ -148,22 +148,19 @@ function initEventListeners() {
     });
   });
 
-  // Key Generator Calculator & Submit
+  // Key Generator Calculator & Submit — fixed price of 1 credit per key.
   const qtyInput = document.getElementById('gen-quantity');
-  const costInput = document.getElementById('gen-cost');
+  const CREDIT_PER_KEY = 1;
 
   function updateCalc() {
     const qty = parseInt(qtyInput.value) || 1;
-    const cost = parseFloat(costInput.value) || 0;
-    const total = qty * cost;
+    const total = qty * CREDIT_PER_KEY;
 
     document.getElementById('calc-qty').textContent = qty;
-    document.getElementById('calc-cost').textContent = cost.toFixed(2) + ' credits';
     document.getElementById('calc-total').textContent = total.toFixed(2) + ' credits';
   }
 
   qtyInput.addEventListener('input', updateCalc);
-  costInput.addEventListener('input', updateCalc);
 
   // Game search
   document.getElementById('game-search-input').addEventListener('input', debounce(searchGames, 300));
@@ -176,7 +173,6 @@ function initEventListeners() {
     const appids = document.getElementById('gen-appids').value;
     const game_name = document.getElementById('gen-game-name').value;
     const quantity = parseInt(qtyInput.value) || 1;
-    const cost = parseFloat(costInput.value) || 1.0;
 
     if (!appids) {
       showToast('Select a game first', 'error');
@@ -184,7 +180,7 @@ function initEventListeners() {
     }
 
     try {
-      const data = await apiCall('/api/keys/generate', 'POST', { appids, game_name, quantity, cost });
+      const data = await apiCall('/api/keys/generate', 'POST', { appids, game_name, quantity });
       state.generatedKeys = data.keys;
       
       // Update credits in UI

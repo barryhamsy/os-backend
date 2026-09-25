@@ -640,7 +640,7 @@ app.get('/api/games', authenticateToken, async (req, res) => {
 // Reseller / Admin Generate Keys
 app.post('/api/keys/generate', authenticateToken, async (req, res) => {
   try {
-    let { appids, quantity, cost, game_name } = req.body;
+    let { appids, quantity, game_name } = req.body;
     game_name = game_name ? String(game_name).trim().slice(0, 200) : null;
 
     if (!appids) {
@@ -662,7 +662,10 @@ app.post('/api/keys/generate', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Quantity must be between 1 and 100' });
     }
 
-    const keyCost = parseFloat(cost) >= 0 ? parseFloat(cost) : 1.0;
+    // Fixed price: every key costs exactly 1 credit. The cost is set server-side
+    // so a reseller can't lower it (a client-supplied cost is ignored).
+    const CREDIT_PER_KEY = 1.0;
+    const keyCost = CREDIT_PER_KEY;
     const totalCost = numKeys * keyCost;
 
     const isReseller = req.user.role === 'reseller';
