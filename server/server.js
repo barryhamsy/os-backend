@@ -510,13 +510,40 @@ async function syncUserEntitlements(steamid) {
 // PUBLIC: Live entitlements for a SteamID, straight from the DB (no GitHub
 // cache). The DLL polls this so a revoke takes effect within one poll cycle.
 // Accepts either the 32-bit AccountID or the 64-bit SteamID64.
+// Read the AppIDs already recorded in users/<steamid64>.json (membership unlocks
+// live here). Returns [] if the file/token is missing.
+async function readUsersJsonAppids(sid64) {
+  if (!GITHUB_TOKEN) return [];
+  try {
+    const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/users/${sid64}.json?ref=main`;
+    const r = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${GITHUB_TOKEN}`,
+        'User-Agent': 'OST-Server/1.0',
+        'Accept': 'application/vnd.github+json',
+      },
+    });
+    if (!r.ok) return [];
+    const j = await r.json();
+    const body = Buffer.from(j.content || '', 'base64').toString('utf8');
+    let data = null;
+    try { data = JSON.parse(body); } catch { /* fall back to digit scan */ }
+    let arr = (data && Array.isArray(data.appids)) ? data.appids
+            : (Array.isArray(data) ? data : (body.match(/\d{2,10}/g) || []));
+    return arr.map((x) => String(x).trim()).filter(Boolean);
+  } catch { return []; }
+}
+
+const STEAM64_BASE = 76561197960265728n;
+function toSteamId64(id) {
+  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
+  catch { return String(id); }
+}
+
 app.get('/api/entitlements/:steamid', async (req, res) => {
   try {
     let id = String(req.params.steamid).trim();
-    // If a 64-bit SteamID64 was supplied, also match the 32-bit AccountID that
-    // the activation flow records, so either form resolves to the same keys.
     const candidates = new Set([id]);
-    const STEAM64_BASE = 76561197960265728n;
     try {
       const n = BigInt(id);
       if (n > STEAM64_BASE) candidates.add(String(n - STEAM64_BASE)); // 64 -> 32
@@ -524,13 +551,65 @@ app.get('/api/entitlements/:steamid', async (req, res) => {
     } catch { /* non-numeric, ignore */ }
 
     const set = new Set();
+    // Per-key activations (keys table).
     for (const c of candidates) {
-      for (const a of await computeEntitlements(c)) set.add(a);
+      for (const a of await computeEntitlements(c)) set.add(String(a));
     }
+    // Membership unlocks (users/<steamid64>.json).
+    for (const a of await readUsersJsonAppids(toSteamId64(id))) set.add(String(a));
+
     const appids = [...set].sort((a, b) => Number(a) - Number(b));
     res.json({ steamid: id, appids: appids.map(Number) });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Steam Unlock membership: record a game unlock. Validates the CDKEY at
+// steamunlockonennabe, then appends the AppID to users/<steamid64>.json.
+const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonennabe.duckdns.org/validate-onennabe-cdkey';
+app.post('/api/su/unlock', async (req, res) => {
+  try {
+    const { cd_key, steamid, appid } = req.body || {};
+    const cd = String(cd_key || '').trim();
+    let sid = String(steamid || '').trim();
+    const appId = String(appid || '').replace(/\D/g, '');
+    if (!cd || !sid || !appId) {
+      return res.status(400).json({ success: false, error: 'cd_key, steamid and appid are required' });
+    }
+    sid = toSteamId64(sid); // membership entitlements are keyed by SteamID64
+
+    // 1. Validate the membership (steamunlockonennabe is the source of truth).
+    let vd = null;
+    try {
+      const vr = await fetch(SU_VALIDATE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cd_key: cd }),
+      });
+      vd = await vr.json().catch(() => null);
+    } catch (e) {
+      return res.status(502).json({ success: false, error: 'Could not validate membership' });
+    }
+    if (!vd || vd.status !== 'success') {
+      return res.status(403).json({ success: false, error: (vd && vd.message) || 'Membership not active' });
+    }
+
+    // 2. Append the AppID to users/<steamid64>.json (dedupe).
+    const current = await readUsersJsonAppids(sid);
+    const set = new Set(current);
+    set.add(appId);
+    const appids = [...set].sort((a, b) => Number(a) - Number(b));
+    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
+    const result = await putFileToGitHub(`users/${sid}.json`, json, `Unlock ${appId} for ${sid}`);
+    if (!result.success) {
+      return res.status(502).json({ success: false, error: 'Could not record the unlock' });
+    }
+
+    console.log(`[SU Unlock] ${sid} += ${appId} (${appids.length} total)`);
+    res.json({ success: true, appids: appids.map(Number) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
