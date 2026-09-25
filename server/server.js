@@ -612,12 +612,19 @@ app.get('/api/su/lookup', async (req, res) => {
     const matches = [];
     for (const k of keys) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const hit = ids.some((s) => String(s && s.steamid) === sid64);
-      if (!hit) continue;
+      const mine = ids.find((s) => String(s && s.steamid) === sid64);
+      if (!mine) continue;
       const exp = String(k.expiry_date || '');
       // YYYY-MM-DD compares correctly as a string. Treat "no expiry" as active.
       const expired = exp ? (exp < today) : false;
-      matches.push({ cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '', expired });
+      matches.push({
+        cd_key: k.cd_key,
+        expiry_date: exp,
+        key_type: k.key_type || '',
+        // The SteamID's own activation date, falling back to the key's.
+        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+        expired,
+      });
     }
 
     // Prefer a still-valid key with the furthest-out expiry.
@@ -626,10 +633,26 @@ app.get('/api/su/lookup', async (req, res) => {
       .sort((a, b) => (String(a.expiry_date) < String(b.expiry_date) ? 1 : -1));
     if (active.length) {
       const m = active[0];
-      return res.json({ found: true, cd_key: m.cd_key, expiry_date: m.expiry_date, key_type: m.key_type });
+      return res.json({
+        found: true,
+        cd_key: m.cd_key,
+        key_type: m.key_type,
+        activation_date: m.activation_date,
+        expiry_date: m.expiry_date,
+      });
     }
     if (matches.length) {
-      return res.json({ found: false, expired: true, message: 'Your Steam Unlock membership has expired.' });
+      // Expired — still return the details so the UI can show what expired.
+      const m = matches.sort((a, b) => (String(a.expiry_date) < String(b.expiry_date) ? 1 : -1))[0];
+      return res.json({
+        found: false,
+        expired: true,
+        cd_key: m.cd_key,
+        key_type: m.key_type,
+        activation_date: m.activation_date,
+        expiry_date: m.expiry_date,
+        message: 'Your Steam Unlock membership has expired.',
+      });
     }
     return res.json({ found: false, message: 'No Steam Unlock membership found for this Steam account.' });
   } catch (e) {
