@@ -415,6 +415,108 @@ async function deleteKeyFromGitHub(cdkey) {
   }
 }
 
+// Helper: PUT any file to the GitHub repo (main/<path>), creating or updating it.
+async function putFileToGitHub(filePath, contentString, message) {
+  if (!GITHUB_TOKEN) return { success: false, reason: 'No GITHUB_TOKEN configured' };
+
+  const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/${filePath}`;
+  const headers = {
+    'Authorization': `Bearer ${GITHUB_TOKEN}`,
+    'User-Agent': 'OST-Server/1.0',
+    'Accept': 'application/vnd.github+json'
+  };
+
+  try {
+    let sha = null;
+    const checkRes = await fetch(`${url}?ref=main`, { headers });
+    if (checkRes.ok) sha = (await checkRes.json()).sha;
+
+    const body = {
+      message,
+      content: Buffer.from(contentString).toString('base64'),
+      branch: 'main'
+    };
+    if (sha) body.sha = sha;
+
+    const putRes = await fetch(url, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (putRes.ok) return { success: true };
+    return { success: false, reason: await putRes.text() };
+  } catch (err) {
+    return { success: false, reason: err.message };
+  }
+}
+
+// Compute the AppIDs a SteamID is currently entitled to: the union of AppIDs
+// across every key that SteamID has activated and that has NOT been revoked.
+// This is the single source of truth for what the DLL should inject.
+async function computeEntitlements(steamid) {
+  const rows = await db.all(
+    "SELECT appids FROM keys WHERE activated_by = ? AND status = 'used'",
+    [steamid]
+  );
+  const set = new Set();
+  for (const r of rows) {
+    for (const a of String(r.appids).split(',')) {
+      const id = a.trim();
+      if (id) set.add(id);
+    }
+  }
+  // Sort numerically for stable output
+  return [...set].sort((a, b) => Number(a) - Number(b));
+}
+
+// Recompute a SteamID's entitlements and write users/<steamid>.json on GitHub.
+// Called after an activation (adds appids) and after a revoke (removes appids
+// no longer covered by any remaining key). Keeps the DLL's GitHub read path
+// working; the live /api/entitlements endpoint below is the fast path.
+async function syncUserEntitlements(steamid) {
+  if (!steamid) return { success: false, reason: 'no steamid' };
+  const appids = await computeEntitlements(steamid);
+  const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
+  const result = await putFileToGitHub(
+    `users/${steamid}.json`,
+    json,
+    `Update entitlements for ${steamid} (${appids.length} appid(s))`
+  );
+  if (result.success) {
+    console.log(`[Entitlements] Synced users/${steamid}.json (${appids.length} appid(s))`);
+  } else {
+    console.warn(`[Entitlements] Failed to sync users/${steamid}.json: ${result.reason}`);
+  }
+  return result;
+}
+
+// PUBLIC: Live entitlements for a SteamID, straight from the DB (no GitHub
+// cache). The DLL polls this so a revoke takes effect within one poll cycle.
+// Accepts either the 32-bit AccountID or the 64-bit SteamID64.
+app.get('/api/entitlements/:steamid', async (req, res) => {
+  try {
+    let id = String(req.params.steamid).trim();
+    // If a 64-bit SteamID64 was supplied, also match the 32-bit AccountID that
+    // the activation flow records, so either form resolves to the same keys.
+    const candidates = new Set([id]);
+    const STEAM64_BASE = 76561197960265728n;
+    try {
+      const n = BigInt(id);
+      if (n > STEAM64_BASE) candidates.add(String(n - STEAM64_BASE)); // 64 -> 32
+      else candidates.add(String(n + STEAM64_BASE));                  // 32 -> 64
+    } catch { /* non-numeric, ignore */ }
+
+    const set = new Set();
+    for (const c of candidates) {
+      for (const a of await computeEntitlements(c)) set.add(a);
+    }
+    const appids = [...set].sort((a, b) => Number(a) - Number(b));
+    res.json({ steamid: id, appids: appids.map(Number) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Revoke CDKey: removes the key (active or activated), deletes it from GitHub,
 // and refunds its cost to the reseller who generated it.
 // Admins can revoke any key; resellers can only revoke keys they generated.
@@ -449,12 +551,21 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
 
     const github = await deleteKeyFromGitHub(cdkey);
 
+    // If this key had been activated, recompute that SteamID's entitlements so
+    // the revoked AppID(s) drop out of users/<steamid>.json — unless another of
+    // the customer's still-valid keys also grants them.
+    let entitlements = null;
+    if (keyRecord.activated_by) {
+      entitlements = await syncUserEntitlements(keyRecord.activated_by);
+    }
+
     let message = `Revoked ${cdkey}`;
     if (refundedTo) message += ` and refunded ${refunded} credits to ${refundedTo}`;
     else if (!creator) message += ' (creator account removed, no refund)';
     if (!github.success) message += '. Warning: could not remove it from GitHub';
+    if (entitlements && !entitlements.success) message += '. Warning: could not update the customer entitlement file';
 
-    res.json({ message, refunded, refunded_to: refundedTo, github });
+    res.json({ message, refunded, refunded_to: refundedTo, github, entitlements });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -693,7 +804,13 @@ async function handleKeyActivation(cdkeyInput, steamidInput, reqIp) {
     VALUES (?, ?, ?, ?)
   `, [cleanKey, cleanSteamID, keyRecord.appids, reqIp || '127.0.0.1']);
 
-  const appidsArray = keyRecord.appids.split(',').map(a => a.trim()).filter(Boolean).map(a => isNaN(Number(a)) ? a : Number(a));
+  // Recompute this SteamID's full entitlement set (this key plus any earlier
+  // keys the same account activated) and push it to users/<steamid>.json.
+  await syncUserEntitlements(cleanSteamID);
+
+  // Return the SteamID's entire entitlement set, so the DLL injects everything
+  // the account owns, not only this one key.
+  const entitled = await computeEntitlements(cleanSteamID);
 
   return {
     status: 200,
@@ -702,7 +819,7 @@ async function handleKeyActivation(cdkeyInput, steamidInput, reqIp) {
       message: 'CDKey activated successfully!',
       cdkey: cleanKey,
       steamid: cleanSteamID,
-      appids: appidsArray
+      appids: entitled.map(Number)
     }
   };
 }
