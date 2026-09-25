@@ -34,8 +34,15 @@ function authenticateToken(req, res, next) {
 
   if (!token) return res.status(401).json({ error: 'Authentication required' });
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, JWT_SECRET, async (err, user) => {
     if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+    try {
+      // Reject tokens of accounts that have since been removed
+      const exists = await db.get('SELECT id FROM users WHERE id = ?', [user.id]);
+      if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
     req.user = user;
     next();
   });
@@ -228,14 +235,33 @@ app.post('/api/admin/topup', authenticateToken, requireAdmin, async (req, res) =
   }
 });
 
+// Admin Remove Reseller
+// The reseller account is deleted. Keys they generated are kept, so keys already
+// sold to customers keep working; they show as "(removed #id)" in the dashboard.
+app.delete('/api/admin/resellers/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const reseller = await db.get("SELECT id, username FROM users WHERE id = ? AND role = 'reseller'", [req.params.id]);
+    if (!reseller) {
+      return res.status(404).json({ error: 'Reseller not found' });
+    }
+
+    await db.run("DELETE FROM users WHERE id = ? AND role = 'reseller'", [reseller.id]);
+
+    res.json({ message: `Reseller '${reseller.username}' removed` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Admin List All Generated Keys
 app.get('/api/admin/keys', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { search, status } = req.query;
     let query = `
-      SELECT k.*, u.username as creator_name
+      SELECT k.*, COALESCE(u.username, '(removed #' || k.created_by || ')') as creator_name,
+             u.role as creator_role
       FROM keys k
-      JOIN users u ON k.created_by = u.id
+      LEFT JOIN users u ON k.created_by = u.id
       WHERE 1=1
     `;
     const params = [];
@@ -246,9 +272,9 @@ app.get('/api/admin/keys', authenticateToken, requireAdmin, async (req, res) => 
     }
 
     if (search) {
-      query += ' AND (k.cdkey LIKE ? OR k.appids LIKE ? OR k.activated_by LIKE ? OR u.username LIKE ?)';
+      query += ' AND (k.cdkey LIKE ? OR k.appids LIKE ? OR k.game_name LIKE ? OR k.activated_by LIKE ? OR u.username LIKE ?)';
       const searchPattern = `%${search}%`;
-      params.push(searchPattern, searchPattern, searchPattern, searchPattern);
+      params.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
     }
 
     query += ' ORDER BY k.created_at DESC LIMIT 500';
@@ -351,10 +377,160 @@ async function commitKeyToGitHub(cdkey, appids) {
   }
 }
 
+// Helper: Delete Key File from GitHub repository (main/keys/<CDKEY>.txt)
+async function deleteKeyFromGitHub(cdkey) {
+  if (!GITHUB_TOKEN) {
+    return { success: false, reason: 'No GITHUB_TOKEN configured' };
+  }
+
+  const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/keys/${cdkey}.txt`;
+  const headers = {
+    'Authorization': `Bearer ${GITHUB_TOKEN}`,
+    'User-Agent': 'OST-Server/1.0',
+    'Accept': 'application/vnd.github+json'
+  };
+
+  try {
+    const checkRes = await fetch(`${url}?ref=main`, { headers });
+    if (checkRes.status === 404) return { success: true, reason: 'File not on GitHub' };
+    if (!checkRes.ok) return { success: false, reason: `Lookup failed (HTTP ${checkRes.status})` };
+    const { sha } = await checkRes.json();
+
+    const delRes = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: `Revoke key ${cdkey}`, sha, branch: 'main' })
+    });
+
+    if (delRes.ok) {
+      console.log(`[GitHub Delete] Removed keys/${cdkey}.txt from ${GITHUB_REPO}`);
+      return { success: true };
+    }
+    const errText = await delRes.text();
+    console.error(`[GitHub Delete Error] keys/${cdkey}.txt (HTTP ${delRes.status}): ${errText}`);
+    return { success: false, reason: errText };
+  } catch (err) {
+    console.error(`[GitHub Delete Exception] ${err.message}`);
+    return { success: false, reason: err.message };
+  }
+}
+
+// Revoke CDKey: removes the key (active or activated), deletes it from GitHub,
+// and refunds its cost to the reseller who generated it.
+// Admins can revoke any key; resellers can only revoke keys they generated.
+app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
+  try {
+    const cdkey = String(req.params.cdkey).trim().toUpperCase();
+    const keyRecord = await db.get('SELECT * FROM keys WHERE cdkey = ?', [cdkey]);
+    if (!keyRecord || (req.user.role !== 'admin' && keyRecord.created_by !== req.user.id)) {
+      return res.status(404).json({ error: 'CDKey not found' });
+    }
+
+    // Delete first; only the request that actually removed the row issues the refund,
+    // so double-clicks can never refund twice.
+    const del = await db.run('DELETE FROM keys WHERE id = ?', [keyRecord.id]);
+    if (del.changes !== 1) {
+      return res.status(409).json({ error: 'CDKey was already revoked' });
+    }
+
+    let refunded = 0;
+    let refundedTo = null;
+    const creator = await db.get('SELECT id, username, role FROM users WHERE id = ?', [keyRecord.created_by]);
+    if (creator && creator.role === 'reseller' && keyRecord.cost > 0) {
+      refunded = keyRecord.cost;
+      refundedTo = creator.username;
+      await db.run('UPDATE users SET credits = credits + ? WHERE id = ?', [refunded, creator.id]);
+      await db.run(`
+        INSERT INTO topup_logs (reseller_id, admin_id, amount, note)
+        VALUES (?, ?, ?, ?)
+      `, [creator.id, req.user.id, refunded,
+          `Refund: revoked ${keyRecord.status === 'used' ? 'activated' : 'unused'} key ${cdkey}`]);
+    }
+
+    const github = await deleteKeyFromGitHub(cdkey);
+
+    let message = `Revoked ${cdkey}`;
+    if (refundedTo) message += ` and refunded ${refunded} credits to ${refundedTo}`;
+    else if (!creator) message += ' (creator account removed, no refund)';
+    if (!github.success) message += '. Warning: could not remove it from GitHub';
+
+    res.json({ message, refunded, refunded_to: refundedTo, github });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// GAME CATALOG (ONENNABE API PROXY)
+// ==========================================
+
+const GAMES_API_URL = process.env.GAMES_API_URL || 'https://steamunlockonennabe.duckdns.org/api/onennabe';
+const GAMES_CACHE_MS = 10 * 60 * 1000;
+let gamesCache = { data: null, fetchedAt: 0, pending: null };
+
+async function getGameCatalog() {
+  const fresh = gamesCache.data && (Date.now() - gamesCache.fetchedAt < GAMES_CACHE_MS);
+  if (fresh) return gamesCache.data;
+  if (gamesCache.pending) return gamesCache.pending;
+
+  gamesCache.pending = (async () => {
+    try {
+      const r = await fetch(GAMES_API_URL, { headers: { 'User-Agent': 'OST-Server/1.0' } });
+      if (!r.ok) throw new Error(`Game catalog returned HTTP ${r.status}`);
+      const json = await r.json();
+      const list = Array.isArray(json) ? json : (json.games || json.data || []);
+      // Keep only what the generator needs
+      gamesCache.data = list
+        .filter(g => g && g.appid && g.name)
+        .map(g => ({ appid: String(g.appid), name: String(g.name) }));
+      gamesCache.fetchedAt = Date.now();
+      return gamesCache.data;
+    } catch (err) {
+      // Serve stale data if we have it
+      if (gamesCache.data) {
+        console.error(`[Game Catalog] Refresh failed, serving cached list: ${err.message}`);
+        return gamesCache.data;
+      }
+      throw err;
+    } finally {
+      gamesCache.pending = null;
+    }
+  })();
+
+  return gamesCache.pending;
+}
+
+// Search games by name or AppID
+app.get('/api/games', authenticateToken, async (req, res) => {
+  try {
+    const q = String(req.query.search || '').trim().toLowerCase();
+    const games = await getGameCatalog();
+
+    let results;
+    if (!q) {
+      results = games.slice(0, 30);
+    } else if (/^\d+$/.test(q)) {
+      results = games.filter(g => g.appid.startsWith(q))
+        .sort((a, b) => (a.appid === q ? -1 : b.appid === q ? 1 : 0));
+    } else {
+      results = games.filter(g => g.name.toLowerCase().includes(q))
+        .sort((a, b) => {
+          const as = a.name.toLowerCase().startsWith(q), bs = b.name.toLowerCase().startsWith(q);
+          return as === bs ? 0 : as ? -1 : 1;
+        });
+    }
+
+    res.json({ total: games.length, games: results.slice(0, 50) });
+  } catch (err) {
+    res.status(502).json({ error: `Could not load game list: ${err.message}` });
+  }
+});
+
 // Reseller / Admin Generate Keys
 app.post('/api/keys/generate', authenticateToken, async (req, res) => {
   try {
-    let { appids, quantity, cost } = req.body;
+    let { appids, quantity, cost, game_name } = req.body;
+    game_name = game_name ? String(game_name).trim().slice(0, 200) : null;
 
     if (!appids) {
       return res.status(400).json({ error: 'AppID(s) are required' });
@@ -398,9 +574,9 @@ app.post('/api/keys/generate', authenticateToken, async (req, res) => {
       }
 
       await db.run(`
-        INSERT INTO keys (cdkey, appids, created_by, cost, status)
-        VALUES (?, ?, ?, ?, 'active')
-      `, [keyStr, appids, req.user.id, keyCost]);
+        INSERT INTO keys (cdkey, appids, game_name, created_by, cost, status)
+        VALUES (?, ?, ?, ?, ?, 'active')
+      `, [keyStr, appids, game_name, req.user.id, keyCost]);
 
       // Automatically commit key file to GitHub repository keys/<cdkey>.txt
       commitKeyToGitHub(keyStr, appids);
@@ -408,6 +584,7 @@ app.post('/api/keys/generate', authenticateToken, async (req, res) => {
       generatedKeys.push({
         cdkey: keyStr,
         appids,
+        game_name,
         cost: keyCost
       });
     }
@@ -438,9 +615,9 @@ app.get('/api/keys/my-keys', authenticateToken, async (req, res) => {
     }
 
     if (search) {
-      query += ' AND (cdkey LIKE ? OR appids LIKE ? OR activated_by LIKE ?)';
+      query += ' AND (cdkey LIKE ? OR appids LIKE ? OR game_name LIKE ? OR activated_by LIKE ?)';
       const pattern = `%${search}%`;
-      params.push(pattern, pattern, pattern);
+      params.push(pattern, pattern, pattern, pattern);
     }
 
     query += ' ORDER BY created_at DESC LIMIT 500';

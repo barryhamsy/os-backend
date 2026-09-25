@@ -63,6 +63,9 @@ async function initDb() {
       )
     `);
 
+    // Migration: store the game name alongside the AppID (ignored if column already exists)
+    db.run(`ALTER TABLE keys ADD COLUMN game_name TEXT`, () => {});
+
     // 3. Topup Logs table
     db.run(`
       CREATE TABLE IF NOT EXISTS topup_logs (
