@@ -570,22 +570,29 @@ app.get('/api/entitlements/:steamid', async (req, res) => {
 // are GET endpoints and os-backend does the proper server-to-server POST.
 const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonennabe.duckdns.org/validate-onennabe-cdkey';
 
-// Server-to-server: ask steamunlockonennabe whether a CD key is valid.
-async function suValidate(cd) {
+// Server-to-server: ask steamunlockonennabe whether a CD key is valid. It needs
+// both the CD key and the SteamID; we send field-name aliases so it matches
+// whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
+async function suValidate(cd, sid) {
+  const sid64 = sid ? toSteamId64(String(sid)) : '';
   const vr = await fetch(SU_VALIDATE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cd_key: cd }),
+    body: JSON.stringify({
+      cd_key: cd, cdkey: cd,
+      steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
+    }),
   });
   return await vr.json().catch(() => null);
 }
 
-// GET /api/su/validate?cd_key=...  → passes steamunlockonennabe's result through.
+// GET /api/su/validate?cd_key=...&steamid=...  → passes the result through.
 app.get('/api/su/validate', async (req, res) => {
   const cd = String(req.query.cd_key || '').trim();
+  const sid = String(req.query.steamid || '').trim();
   if (!cd) return res.status(400).json({ status: 'error', message: 'cd_key required' });
   try {
-    const vd = await suValidate(cd);
+    const vd = await suValidate(cd, sid);
     if (!vd) return res.status(502).json({ status: 'error', message: 'Validation server error' });
     return res.json(vd);
   } catch (e) {
@@ -606,7 +613,7 @@ async function suUnlock(params, res) {
 
     // 1. Validate the membership.
     let vd = null;
-    try { vd = await suValidate(cd); }
+    try { vd = await suValidate(cd, sid); }
     catch (e) { return res.status(502).json({ success: false, error: 'Could not validate membership' }); }
     if (!vd || vd.status !== 'success') {
       return res.status(403).json({ success: false, error: (vd && vd.message) || 'Membership not active' });
