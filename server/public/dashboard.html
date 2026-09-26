@@ -64,6 +64,10 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .center{text-align:center;padding:40px 0}
 .unlocked{color:var(--green);font-weight:700;font-size:12px;text-align:center;padding:9px}
 .topcmd{background:#0b1622;border:1px dashed rgba(102,192,244,.35);border-radius:10px;padding:10px 12px;font-family:monospace;font-size:13px;color:var(--blue);margin-top:8px;user-select:all}
+.pager{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:20px}
+.pager .btn{padding:9px 16px}
+.pager .btn:disabled{opacity:.4;cursor:default}
+#pageinfo{font-size:13px;min-width:130px;text-align:center}
 </style>
 </head>
 <body>
@@ -119,10 +123,18 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 
     <!-- Games -->
     <div class="card">
-      <h2 class="h">Unlock games</h2>
+      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <h2 class="h" style="margin:0">Unlock games</h2>
+        <div id="gamecount" class="muted" style="font-size:13px"></div>
+      </div>
       <input id="search" class="search" placeholder="Search games by name or AppID…">
       <div id="games" class="grid"></div>
       <div id="gamestatus" class="center muted hide"></div>
+      <div id="pager" class="pager hide">
+        <button id="prev" class="btn btn-ghost">‹ Prev</button>
+        <span id="pageinfo" class="muted"></span>
+        <button id="next" class="btn btn-ghost">Next ›</button>
+      </div>
     </div>
   </div>
 </div>
@@ -211,17 +223,38 @@ async function unlockGame(g, btn) {
 }
 
 let searchTimer = null;
-async function loadGames(q) {
+let curQuery = '';
+let curPage = 1;
+
+function fmt(n){ return Number(n).toLocaleString('en-US'); }
+
+async function loadGames(q, page) {
+  curQuery = q || '';
+  curPage = page || 1;
   $('gamestatus').classList.remove('hide'); $('gamestatus').innerHTML='<span class="spin"></span> Loading…';
-  $('games').innerHTML='';
+  $('games').innerHTML=''; $('pager').classList.add('hide');
   try {
-    const r = await api('/dash/api/games?q=' + encodeURIComponent(q||''));
+    const r = await api('/dash/api/games?q=' + encodeURIComponent(curQuery) + '&page=' + curPage);
     const games = r.games || [];
+    // Count header.
+    if (curQuery) $('gamecount').textContent = fmt(r.total) + ' match' + (r.total===1?'':'es') + ' · ' + fmt(r.catalogTotal) + ' games total';
+    else $('gamecount').textContent = fmt(r.catalogTotal||r.total) + ' games available';
+    // Grid.
     $('gamestatus').classList.toggle('hide', games.length>0);
     if (!games.length) $('gamestatus').textContent = 'No games found.';
     const frag = document.createDocumentFragment();
     games.forEach(g => frag.appendChild(gameCard(g)));
     $('games').appendChild(frag);
+    // Pager.
+    curPage = r.page || 1;
+    const pages = r.pages || 1;
+    if (pages > 1) {
+      $('pager').classList.remove('hide');
+      $('pageinfo').textContent = 'Page ' + fmt(r.page) + ' of ' + fmt(pages);
+      $('prev').disabled = r.page <= 1;
+      $('next').disabled = r.page >= pages;
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch(e){ if(e.message!=='unauth'){ $('gamestatus').textContent='Failed to load games.'; } }
 }
 
@@ -247,9 +280,8 @@ async function refreshMe() {
   ME = await api('/dash/api/me');
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
-  // Re-render current game list to reflect unlocked state.
-  const q = $('search').value.trim();
-  loadGames(q);
+  // Re-render current page to reflect unlocked state, staying where we are.
+  loadGames(curQuery, curPage);
 }
 
 async function init() {
@@ -263,10 +295,12 @@ async function init() {
     `<a class="btn btn-ghost" href="/auth/logout" style="padding:8px 14px">Sign out</a></div>`;
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
-  loadGames('');
+  loadGames('', 1);
   $('activatebtn').addEventListener('click', activateKey);
   $('cdkey').addEventListener('keydown', e => { if (e.key==='Enter') activateKey(); });
-  $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(()=>loadGames($('search').value.trim()),300); });
+  $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(()=>loadGames($('search').value.trim(), 1),300); });
+  $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curQuery, curPage-1); });
+  $('next').addEventListener('click', () => loadGames(curQuery, curPage+1));
 }
 init();
 </script>
