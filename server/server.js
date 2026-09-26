@@ -753,19 +753,18 @@ app.get('/api/patch-info/:appid', async (req, res) => {
   const appid = String(req.params.appid || '').replace(/\D/g, '');
   if (!appid) return res.status(400).json({ error: 'appid required' });
   try {
-    const gr = await fetch(GAMES_API_URL);
-    const data = await gr.json().catch(() => null);
-    const list = (data && (Array.isArray(data) ? data : data.games || data.data)) || [];
-    const g = list.find((x) => String(x && x.appid) === appid);
+    // Serve from the shared 10-minute catalog cache (deduped, timed). This used
+    // to fetch the FULL catalog on every call — the plugin hits this once per
+    // installed game, so a large library hammered api/onennabe and crashed us.
+    await getGameCatalog();
+    const g = gamesCache.byId && gamesCache.byId.get(appid);
     if (!g) return res.json({ appid, found: false, patchable: false });
-    const yes = (v) => String(v).trim().toLowerCase() === 'yes' || v === 1 || v === true || String(v) === '1';
-    const online = yes(g.online_supported);
-    const bypass = yes(g.bypass_supported);
-    const hyper = yes(g.hypervisor_bypass);
     return res.json({
       appid, found: true, name: g.name || '',
-      online_supported: online, bypass_supported: bypass, hypervisor_bypass: hyper,
-      patchable: online || bypass || hyper,
+      online_supported: g.online_supported,
+      bypass_supported: g.bypass_supported,
+      hypervisor_bypass: g.hypervisor_bypass,
+      patchable: g.online_supported || g.bypass_supported || g.hypervisor_bypass,
     });
   } catch (e) {
     return res.status(502).json({ error: 'catalog unreachable' });
@@ -908,7 +907,8 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
 
 const GAMES_API_URL = process.env.GAMES_API_URL || 'https://steamunlockonennabe.duckdns.org/api/onennabe';
 const GAMES_CACHE_MS = 10 * 60 * 1000;
-let gamesCache = { data: null, fetchedAt: 0, pending: null };
+let gamesCache = { data: null, byId: null, fetchedAt: 0, pending: null };
+const _yesFlag = (v) => { const s = String(v == null ? '' : v).trim().toLowerCase(); return s === 'yes' || s === '1' || s === 'true'; };
 
 async function getGameCatalog() {
   const fresh = gamesCache.data && (Date.now() - gamesCache.fetchedAt < GAMES_CACHE_MS);
@@ -921,10 +921,20 @@ async function getGameCatalog() {
       if (!r.ok) throw new Error(`Game catalog returned HTTP ${r.status}`);
       const json = await r.json();
       const list = Array.isArray(json) ? json : (json.games || json.data || []);
-      // Keep only what the generator needs
-      gamesCache.data = list
+      // Keep only what we need — name for the grid, plus the patch flags so
+      // /api/patch-info can answer from cache instead of re-fetching the whole
+      // catalog on every call (that per-game hammering is what crashed the server).
+      const data = list
         .filter(g => g && g.appid && g.name)
-        .map(g => ({ appid: String(g.appid), name: String(g.name) }));
+        .map(g => ({
+          appid: String(g.appid),
+          name: String(g.name),
+          online_supported: _yesFlag(g.online_supported),
+          bypass_supported: _yesFlag(g.bypass_supported),
+          hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
+        }));
+      gamesCache.data = data;
+      gamesCache.byId = new Map(data.map(g => [g.appid, g]));
       gamesCache.fetchedAt = Date.now();
       return gamesCache.data;
     } catch (err) {

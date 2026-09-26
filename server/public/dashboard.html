@@ -256,7 +256,7 @@ async function api(path, opts) {
     r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
   } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
-  if (!r.ok) throw new Error('http ' + r.status);
+  if (r.status >= 500) throw new Error('http ' + r.status); // 5xx / 504 → caller treats as failure
   return r.json();
 }
 
