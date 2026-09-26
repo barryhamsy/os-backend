@@ -61,6 +61,8 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .game .nm{font-size:13.5px;font-weight:700;line-height:1.3;min-height:35px}
 .game .ap{font-size:11px;color:var(--muted);font-family:monospace}
 .game .btn{width:100%;justify-content:center;padding:9px}
+.game .btn-remove{background:rgba(255,107,107,.12);color:#ff9c8c;border:1px solid rgba(255,107,107,.3)}
+.game .btn-remove:hover:not(:disabled){background:rgba(255,107,107,.2)}
 .status{font-size:13px;margin-top:10px;min-height:18px}
 .spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;display:inline-block;animation:sp .7s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -170,6 +172,9 @@ function renderMembership() {
   const mem = ME.membership || { found:false };
   const box = $('mempill'), line = $('memline'), det = $('memdetails');
   const dleft = daysUntil(mem.expiry_date);
+  // Hide the CD-key activation field once membership is active — only show it
+  // when there's no active membership (none or expired).
+  $('activatebox').classList.toggle('hide', !!mem.found);
   if (mem.found) {
     const label = (mem.expiry_date && dleft!=null) ? `ACTIVE · ${dleft} day${dleft===1?'':'s'} left` : 'ACTIVE';
     box.innerHTML = `<span class="pill pill-on">${label}</span>`;
@@ -196,17 +201,20 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;',
 // Steam cover art is spread across several CDN hosts, and any single one is
 // often missing a given appid. Try them in order, falling through on error —
 // same approach as the launcher's _setImageWithScreenshotFallback.
+// Every candidate is the SAME standard landscape shape (Steam header capsule,
+// 460×215) so all cards render at a uniform size. If no cover exists on the CDN,
+// fall back to a game screenshot (also landscape) and finally the SGDB header —
+// never a portrait/grid image, which would break the uniform card size.
 function coverCandidates(appid) {
   return [
     'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/header.jpg',
     'https://cdn.cloudflare.steamstatic.com/steam/apps/' + appid + '/header.jpg',
     'https://cdn.akamai.steamstatic.com/steam/apps/' + appid + '/header.jpg',
     'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/capsule_616x353.jpg',
-    'https://steamcdn-a.akamaihd.net/steam/apps/' + appid + '/library_hero.jpg',
-    'https://steamcdn-a.akamaihd.net/steam/apps/' + appid + '/capsule_231x87.jpg',
-    // Last resort: our SteamGridDB proxy — covers games Steam's CDN doesn't have.
+    // No cover on the CDN → use a game screenshot (landscape) via our proxy.
+    '/api/screenshot/' + appid,
+    // Last resort: SteamGridDB, header shape only (never the portrait grid).
     '/api/sgdb/header/' + appid,
-    '/api/sgdb/grid/' + appid,
   ];
 }
 function setCover(img, appid, nameEl) {
@@ -222,8 +230,24 @@ function setCover(img, appid, nameEl) {
   img.src = sources[0];
 }
 
-function gameCard(g) {
+// (Re)build a card's name/appid/action area from the current unlocked state.
+// Called on first render and again after an unlock or a remove so the card flips
+// between "Unlock game" and "✓ Unlocked + Remove" in place.
+function fillCardBody(el, g) {
   const has = unlocked.has(String(g.appid));
+  const body = el.querySelector('.body');
+  body.innerHTML =
+    `<div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` +
+    (has
+      ? `<div class="unlocked">✓ Unlocked</div><button class="btn btn-remove" data-appid="${g.appid}">Remove</button>`
+      : `<button class="btn btn-green" data-appid="${g.appid}">Unlock game</button>`);
+  const unlockBtn = body.querySelector('.btn-green');
+  if (unlockBtn) unlockBtn.addEventListener('click', () => unlockGame(g, unlockBtn));
+  const removeBtn = body.querySelector('.btn-remove');
+  if (removeBtn) removeBtn.addEventListener('click', () => removeGame(g, removeBtn));
+}
+
+function gameCard(g) {
   const el = document.createElement('div');
   el.className = 'game';
   const art = document.createElement('div');
@@ -234,16 +258,11 @@ function gameCard(g) {
   el.appendChild(art);
   const body = document.createElement('div');
   body.className = 'body';
-  body.innerHTML =
-    `<div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` +
-    (has ? `<div class="unlocked">✓ Unlocked</div>`
-         : `<button class="btn btn-green" data-appid="${g.appid}">Unlock game</button>`);
   el.appendChild(body);
   // Placeholder shows the game name if every CDN misses.
   art.setAttribute('data-name', g.name);
   setCover(img, g.appid, art);
-  const btn = body.querySelector('button');
-  if (btn) btn.addEventListener('click', () => unlockGame(g, btn));
+  fillCardBody(el, g);
   return el;
 }
 
@@ -255,14 +274,24 @@ async function unlockGame(g, btn) {
     const r = await api('/dash/api/unlock', { method:'POST', body: JSON.stringify({ appid: g.appid }) });
     if (r.success) {
       unlocked = new Set((r.appids||[]).map(String));
-      const card = btn.closest('.game');
-      btn.remove();
-      const done = document.createElement('div'); done.className='unlocked'; done.textContent='✓ Unlocked';
-      card.querySelector('.body').appendChild(done);
+      fillCardBody(btn.closest('.game'), g);
     } else {
       alert(r.error || 'Unlock failed'); btn.disabled=false; btn.textContent='Unlock game';
     }
   } catch(e){ if(e.message!=='unauth'){ alert('Error: '+e.message); btn.disabled=false; btn.textContent='Unlock game'; } }
+}
+
+async function removeGame(g, btn) {
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Removing…';
+  try {
+    const r = await api('/dash/api/remove', { method:'POST', body: JSON.stringify({ appid: g.appid }) });
+    if (r.success) {
+      unlocked = new Set((r.appids||[]).map(String));
+      fillCardBody(btn.closest('.game'), g);
+    } else {
+      alert(r.error || 'Remove failed'); btn.disabled=false; btn.textContent='Remove';
+    }
+  } catch(e){ if(e.message!=='unauth'){ alert('Error: '+e.message); btn.disabled=false; btn.textContent='Remove'; } }
 }
 
 let searchTimer = null;

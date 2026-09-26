@@ -1331,6 +1331,57 @@ app.post('/dash/api/unlock', requireSteam, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Remove a previously-unlocked game from this SteamID's list. Because the DLL
+// injects purely from this list (nothing written to stplug-in), dropping the
+// appid here revokes it on the next Steam launch.
+app.post('/dash/api/remove', requireSteam, async (req, res) => {
+  try {
+    const sid = toSteamId64(req.steamid);
+    const appId = String((req.body && req.body.appid) || '').replace(/\D/g, '');
+    if (!appId) return res.status(400).json({ error: 'appid required' });
+    const current = await readUsersJsonAppids(sid);
+    const set = new Set(current.map(String));
+    if (!set.delete(appId)) {
+      // Not present — idempotent success so the UI just reflects reality.
+      return res.json({ success: true, appids: [...set].map(Number).sort((a, b) => a - b) });
+    }
+    const appids = [...set].sort((a, b) => Number(a) - Number(b));
+    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
+    const result = await putFileToGitHub(`users/${sid}.json`, json, `Dashboard remove ${appId} for ${sid}`);
+    if (!result.success) return res.status(502).json({ error: 'Could not record the removal' });
+    console.log(`[Dashboard] ${sid} -= ${appId} (${appids.length} total)`);
+    res.json({ success: true, appids: appids.map(Number) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Steam screenshot proxy (landscape fallback when no header/cover exists) ───
+// The dashboard tries the header capsule first; if a game has none, it falls
+// back here. We query Steam's appdetails once per appid and 302 to the first
+// screenshot (a landscape image), caching the result (and misses).
+const _shotCache = new Map(); // appid -> screenshot URL ('' = none)
+app.get('/api/screenshot/:appid', async (req, res) => {
+  const appid = String(req.params.appid || '').replace(/\D/g, '');
+  if (!appid) return res.status(400).end();
+  if (_shotCache.has(appid)) {
+    const u = _shotCache.get(appid);
+    return u ? res.redirect(u) : res.status(404).end();
+  }
+  try {
+    const r = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appid}&filters=screenshots`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    const data = await r.json().catch(() => null);
+    const node = data && data[appid];
+    const shots = (node && node.success && node.data && Array.isArray(node.data.screenshots)) ? node.data.screenshots : [];
+    if (shots.length) {
+      const url = shots[0].path_thumbnail || shots[0].path_full;
+      if (url) { _shotCache.set(appid, url); return res.redirect(url); }
+    }
+  } catch (e) { /* fall through */ }
+  _shotCache.set(appid, ''); // remember the miss
+  return res.status(404).end();
+});
+
 // ── SteamGridDB cover proxy (fills in covers Steam's CDN doesn't have) ────────
 const SGDB_API_KEY = process.env.SGDB_API_KEY || 'a37cf00b6dbbc62bac4650e53e902b46';
 const _sgdbCache = new Map(); // "type_appid" -> resolved image URL (or '' = none)
