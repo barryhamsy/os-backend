@@ -5,6 +5,17 @@ const path = require('path');
 const dbPath = path.join(__dirname, 'database.db');
 const db = new sqlite3.Database(dbPath);
 
+// Scale hardening for many concurrent users:
+//  - WAL lets reads and writes proceed concurrently (default rollback journal
+//    blocks readers during a write) — big win under load.
+//  - busy_timeout makes a writer wait for a lock instead of throwing SQLITE_BUSY.
+//  - synchronous=NORMAL is safe with WAL and much faster than FULL.
+// NOTE: WAL creates database.db-wal and database.db-shm alongside the DB —
+// keep those out of git (see .gitignore).
+db.run('PRAGMA journal_mode = WAL');
+db.run('PRAGMA busy_timeout = 5000');
+db.run('PRAGMA synchronous = NORMAL');
+
 // Helper for promise-based queries
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -65,6 +76,12 @@ async function initDb() {
 
     // Migration: store the game name alongside the AppID (ignored if column already exists)
     db.run(`ALTER TABLE keys ADD COLUMN game_name TEXT`, () => {});
+
+    // Index the column computeEntitlements() filters on, so membership lookups
+    // stay instant as the keys table grows into the thousands.
+    db.run(`CREATE INDEX IF NOT EXISTS idx_keys_activated_by ON keys(activated_by)`);
+    // Fast lookups of a SteamID's activation history.
+    db.run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`);
 
     // 3. Topup Logs table
     db.run(`
