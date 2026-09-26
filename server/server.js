@@ -1237,17 +1237,26 @@ app.post('/dash/api/activate', requireSteam, async (req, res) => {
   } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server' }); }
 });
 
-// Search the onennabe catalog (name / appid). Returns cover art for the grid.
+// Search + paginate the onennabe catalog (name / appid). Returns cover art plus
+// the total match count and page metadata for the grid.
 app.get('/dash/api/games', requireSteam, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().toLowerCase();
     const games = await getGameCatalog();
-    let results;
-    if (!q) results = games.slice(0, 60);
-    else if (/^\d+$/.test(q)) results = games.filter((g) => g.appid.includes(q)).slice(0, 60);
-    else results = games.filter((g) => g.name.toLowerCase().includes(q)).slice(0, 60);
+    let matches;
+    if (!q) matches = games;
+    else if (/^\d+$/.test(q)) matches = games.filter((g) => g.appid.includes(q));
+    else matches = games.filter((g) => g.name.toLowerCase().includes(q));
+
+    const total = matches.length;
+    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 24, 1), 60);
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(Math.max(parseInt(req.query.page, 10) || 1, 1), pages);
+    const slice = matches.slice((page - 1) * pageSize, page * pageSize);
+
     res.json({
-      games: results.map((g) => ({
+      total, page, pages, pageSize, catalogTotal: games.length,
+      games: slice.map((g) => ({
         appid: g.appid,
         name: g.name,
         cover: `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.appid}/header.jpg`,

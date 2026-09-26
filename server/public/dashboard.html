@@ -52,7 +52,11 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .search:focus{border-color:var(--blue)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-top:16px}
 .game{background:#0f1a26;border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
-.game img{width:100%;aspect-ratio:460/215;object-fit:cover;background:#0a121b;display:block}
+.game .art{position:relative;width:100%;aspect-ratio:460/215;background:linear-gradient(135deg,#12202f,#0a121b);display:block}
+.game .art img{width:100%;height:100%;object-fit:cover;display:block}
+/* When no cover loads, show the game name centered over the gradient. */
+.game .art.noart::after{content:attr(data-name);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:10px;font-size:13px;font-weight:700;color:#8fb3cf;line-height:1.3}
 .game .body{padding:10px 12px;display:flex;flex-direction:column;gap:8px;flex:1}
 .game .nm{font-size:13.5px;font-weight:700;line-height:1.3;min-height:35px}
 .game .ap{font-size:11px;color:var(--muted);font-family:monospace}
@@ -189,17 +193,53 @@ function renderMembership() {
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
+// Steam cover art is spread across several CDN hosts, and any single one is
+// often missing a given appid. Try them in order, falling through on error —
+// same approach as the launcher's _setImageWithScreenshotFallback.
+function coverCandidates(appid) {
+  return [
+    'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/header.jpg',
+    'https://cdn.cloudflare.steamstatic.com/steam/apps/' + appid + '/header.jpg',
+    'https://cdn.akamai.steamstatic.com/steam/apps/' + appid + '/header.jpg',
+    'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/capsule_616x353.jpg',
+    'https://steamcdn-a.akamaihd.net/steam/apps/' + appid + '/library_hero.jpg',
+    'https://steamcdn-a.akamaihd.net/steam/apps/' + appid + '/capsule_231x87.jpg',
+  ];
+}
+function setCover(img, appid, nameEl) {
+  const sources = coverCandidates(appid);
+  let i = 0;
+  img.style.opacity = '0';
+  img.onload = () => { img.style.opacity = ''; };
+  img.onerror = () => {
+    i++;
+    if (i < sources.length) { img.src = sources[i]; }
+    else { img.onerror = null; img.onload = null; img.remove(); if (nameEl) nameEl.classList.add('noart'); }
+  };
+  img.src = sources[0];
+}
+
 function gameCard(g) {
   const has = unlocked.has(String(g.appid));
   const el = document.createElement('div');
   el.className = 'game';
-  el.innerHTML =
-    `<img loading="lazy" src="${g.cover}" onerror="this.style.visibility='hidden'">` +
-    `<div class="body"><div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` +
+  const art = document.createElement('div');
+  art.className = 'art';
+  const img = document.createElement('img');
+  img.loading = 'lazy';
+  art.appendChild(img);
+  el.appendChild(art);
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.innerHTML =
+    `<div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` +
     (has ? `<div class="unlocked">✓ Unlocked</div>`
-         : `<button class="btn btn-green" data-appid="${g.appid}">Unlock game</button>`) +
-    `</div>`;
-  const btn = el.querySelector('button');
+         : `<button class="btn btn-green" data-appid="${g.appid}">Unlock game</button>`);
+  el.appendChild(body);
+  // Placeholder shows the game name if every CDN misses.
+  art.setAttribute('data-name', g.name);
+  setCover(img, g.appid, art);
+  const btn = body.querySelector('button');
   if (btn) btn.addEventListener('click', () => unlockGame(g, btn));
   return el;
 }
