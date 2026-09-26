@@ -1053,18 +1053,32 @@ const GAMES_CACHE_MS = 10 * 60 * 1000;
 let gamesCache = { data: null, byId: null, fetchedAt: 0, pending: null };
 const _yesFlag = (v) => { const s = String(v == null ? '' : v).trim().toLowerCase(); return s === 'yes' || s === '1' || s === 'true'; };
 
-// Steam store genre IDs (the catalog's numeric primary_genre) → display names.
-const GENRE_NAMES = {
-  '1': 'Action', '2': 'Strategy', '3': 'RPG', '4': 'Casual', '9': 'Racing',
-  '18': 'Sports', '23': 'Indie', '25': 'Adventure', '28': 'Simulation',
-  '29': 'Massively Multiplayer', '37': 'Free to Play', '50': 'Accounting',
-  '51': 'Animation & Modeling', '52': 'Audio Production', '53': 'Design & Illustration',
-  '54': 'Education', '55': 'Photo Editing', '56': 'Software Training', '57': 'Utilities',
-  '58': 'Video Production', '59': 'Web Publishing', '60': 'Game Development',
-  '70': 'Early Access', '71': 'Sexual Content', '72': 'Nudity', '73': 'Violent',
-  '74': 'Gore', '81': 'Documentary', '84': 'Tutorial',
+// Primary-genre mapping (the catalog's numeric primary_genre → display name).
+const GENRE_MAP = {
+  0: 'Unknown Genre', 1: 'Action', 2: 'Strategy', 3: 'RPG', 4: 'Casual', 5: 'Strategy',
+  28: 'Simulation', 18: 'Sports', 9: 'Racing', 10: 'MMO', 11: 'FPS', 12: 'Puzzle',
+  23: 'Indie', 25: 'Adventure', 29: 'Massively Multiplayer', 33: 'Indie', 34: 'Indie',
+  37: 'Free To Play', 50: 'Indie', 51: 'Animation & Modeling', 52: 'Music',
+  53: 'Software & Tools', 54: 'Education', 55: 'Software & Tools', 57: 'Software & Tools',
+  58: 'Software & Tools', 59: 'Software & Tools', 70: 'Early Access', 71: 'Sexual Content',
+  72: 'Sexual Content', 73: 'Adventure', 74: 'Gore', 60: 'Software & Tools',
 };
-function genreName(id) { return GENRE_NAMES[String(id)] || 'Other'; }
+function genreName(id) { return GENRE_MAP[Number(id)] || 'Other'; }
+
+// Adult detector — content_descriptors (preferred), primary_genre fallback, then
+// name-keyword heuristics for mislabeled titles.
+function isAdultGame(game) {
+  try {
+    const cds = (game && game.content_descriptors && game.content_descriptors.length) ? game.content_descriptors : [];
+    for (let i = 0; i < cds.length; i++) { const c = String(cds[i]); if (c === '3' || c === '4') return true; }
+    const pg = Number(game && game.primary_genre);
+    if (pg === 71 || pg === 72) return true;
+    const name = String((game && game.name) || '').toLowerCase();
+    const ADULT_KEYWORD_RE = /\bpornocrates\b|\bpornstar\b|\bsuccubus\b|\bsexdivers\b|\bsextet\b|\bsexy\b|\bpleasure\b|\bhentai\b|\bsex2\b|\bsex\b|\bsexual\b|\becchi\b|\bnsfw\b|\beroge\b|\bxxx\b|\br18\b|18\+|\bnude\b|\bnudity\b|\buncensored\b/;
+    if (ADULT_KEYWORD_RE.test(name)) return true;
+    return false;
+  } catch (e) { return false; }
+}
 // Parse "10.88 GB" / "512 MB" → number of GB (float). Unknown → 0.
 function parseSizeGB(s) {
   const m = String(s || '').match(/([\d.]+)\s*(GB|MB|TB)?/i);
@@ -1098,7 +1112,8 @@ async function getGameCatalog() {
       // /api/patch-info can answer from cache instead of re-fetching the whole
       // catalog on every call (that per-game hammering is what crashed the server).
       const data = list
-        .filter(g => g && g.appid && g.name)
+        // Drop membership-only catalog entries entirely — they aren't unlockable here.
+        .filter(g => g && g.appid && g.name && g.requires_membership !== true)
         .map(g => {
           const gid = String(g.primary_genre || '').trim();
           const gb = parseSizeGB(g.size_gb);
@@ -1110,6 +1125,7 @@ async function getGameCatalog() {
             size_gb: String(g.size_gb || ''),
             sizeGB: gb,
             sizeBucket: sizeBucket(gb),
+            adult: isAdultGame(g),
             online_supported: _yesFlag(g.online_supported),
             bypass_supported: _yesFlag(g.bypass_supported),
             hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
@@ -1493,14 +1509,17 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     const genre = String(req.query.genre || '').trim();       // genre id, '' = any
     const size = String(req.query.size || '').trim();         // bucket key, '' = any
     const scope = String(req.query.scope || 'all').trim();    // 'all' | 'unlocked'
+    const showAdult = String(req.query.adult || '') === '1';  // parental control off?
     const games = await getGameCatalog();
 
+    // Parental control: hide 18+ titles unless explicitly allowed.
+    let pool = showAdult ? games : games.filter((g) => !g.adult);
+
     // "My games" scope: restrict to the signed-in account's unlocked appids.
-    let pool = games;
     if (scope === 'unlocked') {
       const sid = toSteamId64(req.steamid);
       const owned = new Set((await readUsersJsonAppids(sid)).map(String));
-      pool = games.filter((g) => owned.has(g.appid));
+      pool = pool.filter((g) => owned.has(g.appid));
     }
 
     let matches = pool;
@@ -1535,31 +1554,106 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
         genreName: g.genreName,
         size_gb: g.size_gb,
         sizeGB: g.sizeGB,
+        adult: g.adult,
         cover: `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.appid}/header.jpg`,
       })),
     });
   } catch (e) { res.status(502).json({ error: 'Catalog unavailable' }); }
 });
 
-// Steam review summary proxy (for the rating badge / rating filter). Cached per
-// appid; returns { score: 0-9, desc: "Very Positive", total: N } or nulls.
-const _reviewCache = new Map();
-app.get('/api/reviews/:appid', async (req, res) => {
+// Per-game live info for the card — mirrors the desktop app exactly:
+//   • cover + genre + age  ← Steam appdetails (region cc=my, alias-tolerant),
+//     preferring header_image/screenshots so the cover is always correct.
+//   • rating               ← api.steamcmd.net (common.review_score + %positive),
+//     the same source the desktop uses; falls back to appdetails
+//     recommendations/metacritic when a game has no review score yet.
+// Cached per appid; all upstreams best-effort with timeouts.
+const _infoCache = new Map();
+const REVIEW_LABELS = { 9: 'Overwhelmingly Positive', 8: 'Very Positive', 7: 'Positive',
+  6: 'Mostly Positive', 5: 'Mixed', 4: 'Mostly Negative', 3: 'Negative',
+  2: 'Very Negative', 1: 'Overwhelmingly Negative' };
+
+async function fetchAppDetails(appid) {
+  try {
+    const r = await fetchT(
+      `https://store.steampowered.com/api/appdetails?appids=${appid}&l=en&cc=my&filters=basic,genres,screenshots,recommendations,metacritic`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 7000);
+    const data = await r.json().catch(() => null);
+    // Steam sometimes files the reply under a regional alias appid — match by
+    // data.steam_appid, exactly like the desktop's _ss_pick_entry.
+    let node = data && data[appid];
+    if (!(node && node.success && node.data) && data) {
+      for (const v of Object.values(data)) {
+        if (v && v.success && v.data && String(v.data.steam_appid) === appid) { node = v; break; }
+      }
+    }
+    if (node && node.success && node.data) {
+      const d = node.data;
+      const genres = Array.isArray(d.genres) ? d.genres.map((x) => x && x.description).filter(Boolean) : [];
+      const screenshots = Array.isArray(d.screenshots) ? d.screenshots.slice(0, 4).map((s) => s.path_full || s.path_thumbnail).filter(Boolean) : [];
+      return {
+        cover: d.header_image || '', capsule: d.capsule_image || '', screenshots,
+        genres, genre: genres[0] || '',
+        requiredAge: parseInt(d.required_age, 10) || 0, isFree: !!d.is_free,
+        recommendations: (d.recommendations && d.recommendations.total) || 0,
+        metacritic: (d.metacritic && d.metacritic.score) || 0,
+      };
+    }
+  } catch (e) { /* ignore */ }
+  return { cover: '', capsule: '', screenshots: [], genres: [], genre: '', requiredAge: 0, isFree: false, recommendations: 0, metacritic: 0 };
+}
+
+async function fetchReviewScore(appid) {
+  try {
+    const r = await fetchT(`https://api.steamcmd.net/v1/info/${appid}`, {}, 6000);
+    const data = await r.json().catch(() => null);
+    const common = data && data.data && data.data[appid] && data.data[appid].common;
+    if (common) {
+      const score = parseInt(common.review_score, 10);
+      const pct = parseInt(common.review_percentage, 10);
+      return { score: (!isNaN(score) ? score : null), pct: (!isNaN(pct) ? pct : null) };
+    }
+  } catch (e) { /* ignore */ }
+  return { score: null, pct: null };
+}
+
+// Turn the review score (+ appdetails fallbacks) into a display label/class/count.
+function computeRating(rv, det) {
+  if (rv.score && rv.score >= 1) {
+    return { score: rv.score, label: REVIEW_LABELS[rv.score] || '',
+      cls: rv.score >= 6 ? 'pos' : (rv.score <= 3 ? 'neg' : 'mix'),
+      count: (rv.pct != null ? rv.pct + '% positive' : '') };
+  }
+  if (det.recommendations > 0) {
+    const t = det.recommendations;
+    const score = t > 50000 ? 9 : t > 10000 ? 8 : t > 500 ? 6 : 7;
+    return { score, label: REVIEW_LABELS[score], cls: 'pos', count: t.toLocaleString() + ' reviews' };
+  }
+  if (det.metacritic > 0) {
+    const s = det.metacritic;
+    const score = s >= 85 ? 9 : s >= 75 ? 8 : s >= 60 ? 6 : s >= 40 ? 5 : 4;
+    return { score, label: REVIEW_LABELS[score], cls: s >= 60 ? 'pos' : s >= 40 ? 'mix' : 'neg', count: 'Metacritic ' + s };
+  }
+  return { score: null, label: '', cls: '', count: '' };
+}
+
+app.get('/api/gameinfo/:appid', async (req, res) => {
   const appid = String(req.params.appid || '').replace(/\D/g, '');
   if (!appid) return res.status(400).json({ error: 'appid required' });
-  if (_reviewCache.has(appid)) return res.json(_reviewCache.get(appid));
-  let out = { appid, score: null, desc: '', total: 0 };
-  try {
-    const r = await fetchT(`https://store.steampowered.com/appreviews/${appid}?json=1&num_per_page=0&language=all&purchase_type=all`,
-      { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000);
-    const data = await r.json().catch(() => null);
-    const qs = data && data.query_summary;
-    if (qs) out = { appid, score: (typeof qs.review_score === 'number' ? qs.review_score : null),
-                    desc: qs.review_score_desc || '', total: qs.total_reviews || 0 };
-  } catch (e) { /* leave nulls */ }
-  _reviewCache.set(appid, out);
+  if (_infoCache.has(appid)) return res.json(_infoCache.get(appid));
+  const [det, rv] = await Promise.all([fetchAppDetails(appid), fetchReviewScore(appid)]);
+  const out = {
+    appid,
+    genre: det.genre, genres: det.genres,
+    required_age: det.requiredAge, is_free: det.isFree, adult: det.requiredAge >= 18,
+    cover: det.cover, capsule: det.capsule, screenshots: det.screenshots,
+    rating: computeRating(rv, det),
+  };
+  _infoCache.set(appid, out);
   res.json(out);
 });
+// Back-compat alias for the older reviews endpoint.
+app.get('/api/reviews/:appid', (req, res) => res.redirect(307, `/api/gameinfo/${String(req.params.appid || '').replace(/\D/g, '')}`));
 
 // Unlock a game remotely — requires an ACTIVE membership on this SteamID.
 app.post('/dash/api/unlock', requireSteam, async (req, res) => {

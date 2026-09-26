@@ -272,8 +272,8 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                 <option value="8">Very Positive &amp; up</option>
                 <option value="9">Overwhelmingly Positive</option>
               </select>
-              <label class="ptoggle" title="Parental control — 18+ titles are hidden by default">
-                <input type="checkbox" id="adultchk"> Show 18+
+              <label class="ptoggle" title="Parental control — hide 18+ / adult titles">
+                <input type="checkbox" id="adultchk" checked> 🔒 Hide 18+
               </label>
             </div>
             <div id="games" class="grid"></div>
@@ -363,9 +363,9 @@ function coverCandidates(appid) {
     'https://cdn.cloudflare.steamstatic.com/steam/apps/' + appid + '/header.jpg',
     'https://cdn.akamai.steamstatic.com/steam/apps/' + appid + '/header.jpg',
     'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/capsule_616x353.jpg',
-    // No cover on the CDN → use a game screenshot (landscape) via our proxy.
-    '/api/screenshot/' + appid,
-    // Last resort: SteamGridDB, header shape only (never the portrait grid).
+    // Last resort: SteamGridDB header. The region-correct appdetails header_image
+    // + capsule are appended later (once /api/gameinfo loads) so the branded cover
+    // always wins over a random gameplay screenshot.
     '/api/sgdb/header/' + appid,
   ];
 }
@@ -435,8 +435,10 @@ async function loadInfo(el, appid) {
     // exactly like the desktop — used only if the CDN header guesses failed.
     const img = el.querySelector('.art img'), art = el.querySelector('.art');
     addCoverCandidates(img, art, [info.cover, info.capsule].concat(info.screenshots || []));
-    // Refine the genre chip with Steam's canonical genre name when available.
-    if (info.genre) { const gc = el.querySelector('.genre-slot'); if (gc) { gc.textContent = info.genre; gc.style.display = ''; } }
+    // Refine the genre chip with Steam's full canonical genre list (like the
+    // desktop: "Simulation, Strategy, Early Access"), falling back to one genre.
+    const genreText = (Array.isArray(info.genres) && info.genres.length) ? info.genres.slice(0, 3).join(', ') : (info.genre || '');
+    if (genreText) { const gc = el.querySelector('.genre-slot'); if (gc) { gc.textContent = genreText; gc.title = (info.genres || []).join(', '); gc.style.display = ''; } }
     // Steam says 18+? mark it (and hide if parental control is on).
     if (info.adult && el.dataset.adult !== '1') {
       el.dataset.adult = '1';
@@ -629,12 +631,16 @@ async function init() {
     `<a class="btn btn-ghost" href="/auth/logout" style="padding:8px 14px">Sign out</a></div>`;
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
-  // Parental control: remember the viewer's choice (per browser). Default = hide 18+.
-  try { showAdult = localStorage.getItem('og_show_adult') === '1'; } catch (e) { showAdult = false; }
-  $('adultchk').checked = showAdult;
+  // Parental control (default ON = hide 18+). The checkbox is "Hide 18+": checked
+  // hides adult titles, unchecked reveals them. Remembered per browser.
+  let hideAdult = true;
+  try { const v = localStorage.getItem('og_hide_adult'); hideAdult = (v === null) ? true : (v === '1'); } catch (e) { hideAdult = true; }
+  showAdult = !hideAdult;
+  $('adultchk').checked = hideAdult;
   $('adultchk').addEventListener('change', () => {
-    showAdult = $('adultchk').checked;
-    try { localStorage.setItem('og_show_adult', showAdult ? '1' : '0'); } catch (e) {}
+    hideAdult = $('adultchk').checked;
+    showAdult = !hideAdult;
+    try { localStorage.setItem('og_hide_adult', hideAdult ? '1' : '0'); } catch (e) {}
     loadGames(1);
   });
   curQuery = ''; loadGames(1);
