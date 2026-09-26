@@ -463,7 +463,7 @@ async function putFileToGitHub(filePath, contentString, message) {
 
   try {
     let sha = null;
-    const checkRes = await fetch(`${url}?ref=main`, { headers });
+    const checkRes = await fetchT(`${url}?ref=main`, { headers }, 12000);
     if (checkRes.ok) sha = (await checkRes.json()).sha;
 
     const body = {
@@ -473,16 +473,31 @@ async function putFileToGitHub(filePath, contentString, message) {
     };
     if (sha) body.sha = sha;
 
-    const putRes = await fetch(url, {
+    const putRes = await fetchT(url, {
       method: 'PUT',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, 15000);
     if (putRes.ok) return { success: true };
-    return { success: false, reason: await putRes.text() };
+    const reason = await putRes.text().catch(() => '');
+    console.error(`[putFileToGitHub] ${filePath} PUT failed HTTP ${putRes.status}: ${reason.slice(0, 300)}`);
+    return { success: false, status: putRes.status, reason };
   } catch (err) {
+    console.error(`[putFileToGitHub] ${filePath} exception: ${err.message}`);
     return { success: false, reason: err.message };
   }
+}
+
+// Turn a failed putFileToGitHub result into a human-useful message (so a 502
+// tells us WHY: expired token, rate limit, conflict, …) instead of a blank wall.
+function ghErrMsg(base, result) {
+  const r = result && result.reason ? String(result.reason) : '';
+  let hint = '';
+  if (/bad credentials|401/i.test(r)) hint = ' — GitHub token invalid or expired';
+  else if (/rate limit|403/i.test(r)) hint = ' — GitHub rate limit / permission';
+  else if ((result && result.status === 409) || /conflict|sha/i.test(r)) hint = ' — write conflict, try again';
+  else if (/abort|timeout/i.test(r)) hint = ' — GitHub write timed out';
+  return base + hint + (r ? ' [' + r.slice(0, 140) + ']' : '');
 }
 
 // Compute the AppIDs a SteamID is currently entitled to: the union of AppIDs
@@ -843,7 +858,7 @@ async function suUnlock(params, res) {
     const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
     const result = await putFileToGitHub(`users/${sid}.json`, json, `Unlock ${appId} for ${sid}`);
     if (!result.success) {
-      return res.status(502).json({ success: false, error: 'Could not record the unlock' });
+      return res.status(502).json({ success: false, error: ghErrMsg('Could not record the unlock', result) });
     }
 
     console.log(`[SU Unlock] ${sid} += ${appId} (${appids.length} total)`);
@@ -870,7 +885,7 @@ async function suMemberUnlock(params, res) {
     const appids = [...set].sort((a, b) => Number(a) - Number(b));
     const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
     const result = await putFileToGitHub(`users/${sid}.json`, json, `Member unlock ${appId} for ${sid}`);
-    if (!result.success) return res.status(502).json({ success: false, error: 'Could not record the unlock' });
+    if (!result.success) return res.status(502).json({ success: false, error: ghErrMsg('Could not record the unlock', result) });
     console.log(`[Member Unlock] ${sid} += ${appId} (${appids.length} total)`);
     res.json({ success: true, appids: appids.map(Number) });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
@@ -1375,7 +1390,7 @@ app.post('/dash/api/unlock', requireSteam, async (req, res) => {
     const appids = [...set].sort((a, b) => Number(a) - Number(b));
     const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
     const result = await putFileToGitHub(`users/${sid}.json`, json, `Dashboard unlock ${appId} for ${sid}`);
-    if (!result.success) return res.status(502).json({ error: 'Could not record the unlock' });
+    if (!result.success) return res.status(502).json({ error: ghErrMsg('Could not record the unlock', result) });
     console.log(`[Dashboard] ${sid} += ${appId} (${appids.length} total)`);
     res.json({ success: true, appids: appids.map(Number) });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1398,7 +1413,7 @@ app.post('/dash/api/remove', requireSteam, async (req, res) => {
     const appids = [...set].sort((a, b) => Number(a) - Number(b));
     const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
     const result = await putFileToGitHub(`users/${sid}.json`, json, `Dashboard remove ${appId} for ${sid}`);
-    if (!result.success) return res.status(502).json({ error: 'Could not record the removal' });
+    if (!result.success) return res.status(502).json({ error: ghErrMsg('Could not record the removal', result) });
     console.log(`[Dashboard] ${sid} -= ${appId} (${appids.length} total)`);
     res.json({ success: true, appids: appids.map(Number) });
   } catch (e) { res.status(500).json({ error: e.message }); }
