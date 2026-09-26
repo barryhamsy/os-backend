@@ -126,6 +126,10 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .game .chip.rating{border-color:rgba(94,224,160,.3);color:#8ff0bd}
 .game .chip.rating.mixed{border-color:rgba(255,196,84,.3);color:#ffcf6b}
 .game .chip.rating.neg{border-color:rgba(255,107,107,.3);color:#ff9c8c}
+.game .chip.adult{border-color:rgba(255,107,107,.45);color:#ff9c8c;background:rgba(255,107,107,.1);font-weight:800}
+.ptoggle{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);cursor:pointer;
+  padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:rgba(10,16,24,.7);user-select:none}
+.ptoggle input{accent-color:var(--blue2);width:15px;height:15px;cursor:pointer}
 .game{background:linear-gradient(180deg,#101d2b,#0b1421);border:1px solid var(--line);border-radius:14px;
   overflow:hidden;display:flex;flex-direction:column;transition:transform .18s,box-shadow .18s,border-color .18s}
 .game:hover{transform:translateY(-5px);border-color:var(--line2);box-shadow:0 18px 40px rgba(0,0,0,.5),0 0 0 1px rgba(102,192,244,.15)}
@@ -268,6 +272,9 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                 <option value="8">Very Positive &amp; up</option>
                 <option value="9">Overwhelmingly Positive</option>
               </select>
+              <label class="ptoggle" title="Parental control — 18+ titles are hidden by default">
+                <input type="checkbox" id="adultchk"> Show 18+
+              </label>
             </div>
             <div id="games" class="grid"></div>
             <div id="gamestatus" class="center muted hide"></div>
@@ -363,35 +370,47 @@ function coverCandidates(appid) {
   ];
 }
 function setCover(img, appid, nameEl) {
-  const sources = coverCandidates(appid);
-  let i = 0;
+  img._sources = coverCandidates(appid);
+  img._i = 0;
   img.style.opacity = '0';
-  img.onload = () => { img.style.opacity = ''; };
+  img.onload = () => { img.style.display = ''; img.style.opacity = ''; if (nameEl) nameEl.classList.remove('noart'); };
   img.onerror = () => {
-    i++;
-    if (i < sources.length) { img.src = sources[i]; }
-    else { img.onerror = null; img.onload = null; img.remove(); if (nameEl) nameEl.classList.add('noart'); }
+    img._i++;
+    if (img._i < img._sources.length) { img.src = img._sources[img._i]; }
+    else { img.style.display = 'none'; if (nameEl) nameEl.classList.add('noart'); } // keep <img> for later appdetails covers
   };
-  img.src = sources[0];
+  img.src = img._sources[0];
+}
+// Append region-correct covers (appdetails header_image / screenshots). If the
+// CDN guesses already failed (card in noart state), retry with these — this is
+// how the desktop gets the correct cover for regionally-aliased games.
+function addCoverCandidates(img, nameEl, urls) {
+  urls = (urls || []).filter(Boolean);
+  if (!img || !urls.length) return;
+  const start = img._sources ? img._sources.length : 0;
+  img._sources = (img._sources || []).concat(urls);
+  if (nameEl && nameEl.classList.contains('noart')) {
+    img._i = start;
+    nameEl.classList.remove('noart');
+    img.src = img._sources[img._i];
+  }
 }
 
 // (Re)build a card's name/appid/action area from the current unlocked state.
 // Called on first render and again after an unlock or a remove so the card flips
 // between "Unlock game" and "✓ Unlocked + Remove" in place.
-// Map a Steam review_score (0-9) to a chip color class.
-function ratingClass(score) {
-  if (score == null) return 'neg';
-  if (score >= 7) return '';        // positive → green
-  if (score >= 5) return 'mixed';   // mixed → amber
-  return 'neg';                     // negative → red
-}
-// Paint the rating chip from the card's cached review data.
+// Paint the rating chip from the card's cached rating {label, cls, count}.
 function paintRating(el) {
   const chip = el.querySelector('.rating-slot');
   if (!chip) return;
-  const rv = el._review;
-  if (rv && rv.desc) { chip.textContent = rv.desc; chip.className = 'chip rating ' + ratingClass(rv.score); chip.style.display = ''; }
-  else { chip.style.display = 'none'; }
+  const rt = el._rating;
+  if (rt && rt.label) {
+    chip.textContent = rt.label;
+    chip.title = rt.count || '';
+    const cls = rt.cls === 'mix' ? 'mixed' : (rt.cls === 'neg' ? 'neg' : '');
+    chip.className = 'chip rating ' + cls;
+    chip.style.display = '';
+  } else { chip.style.display = 'none'; }
 }
 // Client-side rating filter (the catalog has no rating, so this filters the
 // games currently shown, once each card's Steam review score has loaded).
@@ -404,24 +423,43 @@ function cardPasses(el) {
 }
 function applyRatingFilterToCard(el) { el.style.display = cardPasses(el) ? '' : 'none'; }
 function applyRatingFilter() { document.querySelectorAll('#games .game').forEach(applyRatingFilterToCard); }
-async function loadReview(el, appid) {
+// Fetch live per-game info (Steam appdetails genre/age + appreviews rating) and
+// paint the rating chip, refine the genre chip, and enforce the 18+ label.
+async function loadInfo(el, appid) {
   try {
-    const rv = await api('/api/reviews/' + appid);
-    el._review = rv;
-    el.dataset.score = (rv && rv.score != null) ? rv.score : '';
+    const info = await api('/api/gameinfo/' + appid);
+    el._rating = info.rating || null;
+    el.dataset.score = (info.rating && info.rating.score != null) ? info.rating.score : '';
     paintRating(el);
+    // Region-correct cover fallback (appdetails header_image + screenshots),
+    // exactly like the desktop — used only if the CDN header guesses failed.
+    const img = el.querySelector('.art img'), art = el.querySelector('.art');
+    addCoverCandidates(img, art, [info.cover, info.capsule].concat(info.screenshots || []));
+    // Refine the genre chip with Steam's canonical genre name when available.
+    if (info.genre) { const gc = el.querySelector('.genre-slot'); if (gc) { gc.textContent = info.genre; gc.style.display = ''; } }
+    // Steam says 18+? mark it (and hide if parental control is on).
+    if (info.adult && el.dataset.adult !== '1') {
+      el.dataset.adult = '1';
+      const meta = el.querySelector('.meta');
+      if (meta && !meta.querySelector('.chip.adult')) {
+        const a = document.createElement('span'); a.className = 'chip adult'; a.textContent = '18+'; meta.appendChild(a);
+      }
+      if (!showAdult) el.style.display = 'none';
+    }
     applyRatingFilterToCard(el);
   } catch (_) { /* leave unrated */ }
 }
 
 function fillCardBody(el, g) {
   const has = unlocked.has(String(g.appid));
+  if (g.adult) el.dataset.adult = '1';
   const body = el.querySelector('.body');
   const meta =
     `<div class="meta">` +
-    (g.genreName ? `<span class="chip">${esc(g.genreName)}</span>` : '') +
+    (g.genreName ? `<span class="chip genre-slot">${esc(g.genreName)}</span>` : `<span class="chip genre-slot" style="display:none"></span>`) +
     (g.size_gb ? `<span class="chip">${esc(g.size_gb)}</span>` : '') +
     `<span class="chip rating rating-slot" style="display:none"></span>` +
+    (g.adult ? `<span class="chip adult">18+</span>` : '') +
     `</div>`;
   body.innerHTML =
     `<div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` + meta +
@@ -450,7 +488,7 @@ function gameCard(g) {
   art.setAttribute('data-name', g.name);
   setCover(img, g.appid, art);
   fillCardBody(el, g);
-  loadReview(el, g.appid);       // lazy Steam rating badge
+  loadInfo(el, g.appid);         // lazy Steam appdetails (genre/age) + appreviews (rating)
   return el;
 }
 
@@ -488,7 +526,7 @@ let curPage = 1;
 let curScope = 'all';   // 'all' | 'unlocked'
 let curGenre = '';
 let curSize = '';
-let genresLoaded = false;
+let showAdult = false;  // parental control: 18+ hidden by default
 
 function fmt(n){ return Number(n).toLocaleString('en-US'); }
 
@@ -510,6 +548,7 @@ async function loadGames(page) {
     const params = new URLSearchParams({ q: curQuery, page: String(curPage), scope: curScope });
     if (curGenre) params.set('genre', curGenre);
     if (curSize) params.set('size', curSize);
+    if (showAdult) params.set('adult', '1');
     const r = await api('/dash/api/games?' + params.toString());
     const games = r.games || [];
     populateGenres(r.genres);
@@ -590,6 +629,14 @@ async function init() {
     `<a class="btn btn-ghost" href="/auth/logout" style="padding:8px 14px">Sign out</a></div>`;
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
+  // Parental control: remember the viewer's choice (per browser). Default = hide 18+.
+  try { showAdult = localStorage.getItem('og_show_adult') === '1'; } catch (e) { showAdult = false; }
+  $('adultchk').checked = showAdult;
+  $('adultchk').addEventListener('change', () => {
+    showAdult = $('adultchk').checked;
+    try { localStorage.setItem('og_show_adult', showAdult ? '1' : '0'); } catch (e) {}
+    loadGames(1);
+  });
   curQuery = ''; loadGames(1);
   $('activatebtn').addEventListener('click', activateKey);
   $('cdkey').addEventListener('keydown', e => { if (e.key==='Enter') activateKey(); });

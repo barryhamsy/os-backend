@@ -1053,6 +1053,36 @@ const GAMES_CACHE_MS = 10 * 60 * 1000;
 let gamesCache = { data: null, byId: null, fetchedAt: 0, pending: null };
 const _yesFlag = (v) => { const s = String(v == null ? '' : v).trim().toLowerCase(); return s === 'yes' || s === '1' || s === 'true'; };
 
+// Steam store genre IDs (the catalog's numeric primary_genre) → display names.
+const GENRE_NAMES = {
+  '1': 'Action', '2': 'Strategy', '3': 'RPG', '4': 'Casual', '9': 'Racing',
+  '18': 'Sports', '23': 'Indie', '25': 'Adventure', '28': 'Simulation',
+  '29': 'Massively Multiplayer', '37': 'Free to Play', '50': 'Accounting',
+  '51': 'Animation & Modeling', '52': 'Audio Production', '53': 'Design & Illustration',
+  '54': 'Education', '55': 'Photo Editing', '56': 'Software Training', '57': 'Utilities',
+  '58': 'Video Production', '59': 'Web Publishing', '60': 'Game Development',
+  '70': 'Early Access', '71': 'Sexual Content', '72': 'Nudity', '73': 'Violent',
+  '74': 'Gore', '81': 'Documentary', '84': 'Tutorial',
+};
+function genreName(id) { return GENRE_NAMES[String(id)] || 'Other'; }
+// Parse "10.88 GB" / "512 MB" → number of GB (float). Unknown → 0.
+function parseSizeGB(s) {
+  const m = String(s || '').match(/([\d.]+)\s*(GB|MB|TB)?/i);
+  if (!m) return 0;
+  let v = parseFloat(m[1]); if (isNaN(v)) return 0;
+  const unit = (m[2] || 'GB').toUpperCase();
+  if (unit === 'MB') v /= 1024; else if (unit === 'TB') v *= 1024;
+  return v;
+}
+// Size bucket key for filtering.
+function sizeBucket(gb) {
+  if (gb <= 0) return 'unknown';
+  if (gb < 5) return 'lt5';
+  if (gb < 20) return '5to20';
+  if (gb < 50) return '20to50';
+  return 'gt50';
+}
+
 async function getGameCatalog() {
   const fresh = gamesCache.data && (Date.now() - gamesCache.fetchedAt < GAMES_CACHE_MS);
   if (fresh) return gamesCache.data;
@@ -1069,13 +1099,22 @@ async function getGameCatalog() {
       // catalog on every call (that per-game hammering is what crashed the server).
       const data = list
         .filter(g => g && g.appid && g.name)
-        .map(g => ({
-          appid: String(g.appid),
-          name: String(g.name),
-          online_supported: _yesFlag(g.online_supported),
-          bypass_supported: _yesFlag(g.bypass_supported),
-          hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
-        }));
+        .map(g => {
+          const gid = String(g.primary_genre || '').trim();
+          const gb = parseSizeGB(g.size_gb);
+          return {
+            appid: String(g.appid),
+            name: String(g.name),
+            genre: gid,
+            genreName: genreName(gid),
+            size_gb: String(g.size_gb || ''),
+            sizeGB: gb,
+            sizeBucket: sizeBucket(gb),
+            online_supported: _yesFlag(g.online_supported),
+            bypass_supported: _yesFlag(g.bypass_supported),
+            hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
+          };
+        });
       gamesCache.data = data;
       gamesCache.byId = new Map(data.map(g => [g.appid, g]));
       gamesCache.fetchedAt = Date.now();
@@ -1451,11 +1490,27 @@ app.post('/dash/api/activate', requireSteam, async (req, res) => {
 app.get('/dash/api/games', requireSteam, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().toLowerCase();
+    const genre = String(req.query.genre || '').trim();       // genre id, '' = any
+    const size = String(req.query.size || '').trim();         // bucket key, '' = any
+    const scope = String(req.query.scope || 'all').trim();    // 'all' | 'unlocked'
     const games = await getGameCatalog();
-    let matches;
-    if (!q) matches = games;
-    else if (/^\d+$/.test(q)) matches = games.filter((g) => g.appid.includes(q));
-    else matches = games.filter((g) => g.name.toLowerCase().includes(q));
+
+    // "My games" scope: restrict to the signed-in account's unlocked appids.
+    let pool = games;
+    if (scope === 'unlocked') {
+      const sid = toSteamId64(req.steamid);
+      const owned = new Set((await readUsersJsonAppids(sid)).map(String));
+      pool = games.filter((g) => owned.has(g.appid));
+    }
+
+    let matches = pool;
+    if (q) {
+      matches = /^\d+$/.test(q)
+        ? matches.filter((g) => g.appid.includes(q))
+        : matches.filter((g) => g.name.toLowerCase().includes(q));
+    }
+    if (genre) matches = matches.filter((g) => g.genre === genre);
+    if (size) matches = matches.filter((g) => g.sizeBucket === size);
 
     const total = matches.length;
     const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 24, 1), 60);
@@ -1463,15 +1518,47 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     const page = Math.min(Math.max(parseInt(req.query.page, 10) || 1, 1), pages);
     const slice = matches.slice((page - 1) * pageSize, page * pageSize);
 
+    // Genre facet: the distinct genres present in the current pool (so "My games"
+    // shows only genres you own). Sorted by name.
+    const genreSet = new Map();
+    for (const g of pool) if (g.genre) genreSet.set(g.genre, g.genreName);
+    const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     res.json({
-      total, page, pages, pageSize, catalogTotal: games.length,
+      total, page, pages, pageSize, catalogTotal: games.length, scopeTotal: pool.length,
+      genres,
       games: slice.map((g) => ({
         appid: g.appid,
         name: g.name,
+        genre: g.genre,
+        genreName: g.genreName,
+        size_gb: g.size_gb,
+        sizeGB: g.sizeGB,
         cover: `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.appid}/header.jpg`,
       })),
     });
   } catch (e) { res.status(502).json({ error: 'Catalog unavailable' }); }
+});
+
+// Steam review summary proxy (for the rating badge / rating filter). Cached per
+// appid; returns { score: 0-9, desc: "Very Positive", total: N } or nulls.
+const _reviewCache = new Map();
+app.get('/api/reviews/:appid', async (req, res) => {
+  const appid = String(req.params.appid || '').replace(/\D/g, '');
+  if (!appid) return res.status(400).json({ error: 'appid required' });
+  if (_reviewCache.has(appid)) return res.json(_reviewCache.get(appid));
+  let out = { appid, score: null, desc: '', total: 0 };
+  try {
+    const r = await fetchT(`https://store.steampowered.com/appreviews/${appid}?json=1&num_per_page=0&language=all&purchase_type=all`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000);
+    const data = await r.json().catch(() => null);
+    const qs = data && data.query_summary;
+    if (qs) out = { appid, score: (typeof qs.review_score === 'number' ? qs.review_score : null),
+                    desc: qs.review_score_desc || '', total: qs.total_reviews || 0 };
+  } catch (e) { /* leave nulls */ }
+  _reviewCache.set(appid, out);
+  res.json(out);
 });
 
 // Unlock a game remotely — requires an ACTIVE membership on this SteamID.
