@@ -104,8 +104,28 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
   background:rgba(0,0,0,.32);color:#fff;font-size:15px;outline:none;transition:.15s}
 .search:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.15)}
 
+/* ── two-column layout: left sidebar + right game list ───────────── */
+.layout{display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start}
+.side{display:flex;flex-direction:column;gap:20px;position:sticky;top:20px}
+.side .card,.main .card{margin-bottom:0}
+.tabs{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.tab{border:none;background:rgba(255,255,255,.05);color:var(--muted);font-weight:700;font-family:inherit;
+  font-size:13.5px;padding:8px 16px;border-radius:10px;cursor:pointer;transition:.15s}
+.tab:hover{background:rgba(255,255,255,.1);color:var(--text)}
+.tab.active{background:linear-gradient(135deg,var(--blue2),var(--blue3));color:#fff;box-shadow:0 6px 16px rgba(26,159,255,.35)}
+.filters{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.sel{flex:1;min-width:150px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+  background:rgba(10,16,24,.7);color:var(--text);font-size:13.5px;font-family:inherit;outline:none;cursor:pointer}
+.sel:focus{border-color:var(--blue)}
+@media (max-width:860px){ .layout{grid-template-columns:1fr} .side{position:static} }
+
 /* ── game grid ───────────────────────────────────────────────────── */
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(224px,1fr));gap:16px;margin-top:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px;margin-top:18px}
+.game .meta{display:flex;flex-wrap:wrap;gap:6px;font-size:10.5px;color:var(--muted);margin-top:-2px}
+.game .chip{background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:6px;padding:2px 7px;white-space:nowrap}
+.game .chip.rating{border-color:rgba(94,224,160,.3);color:#8ff0bd}
+.game .chip.rating.mixed{border-color:rgba(255,196,84,.3);color:#ffcf6b}
+.game .chip.rating.neg{border-color:rgba(255,107,107,.3);color:#ff9c8c}
 .game{background:linear-gradient(180deg,#101d2b,#0b1421);border:1px solid var(--line);border-radius:14px;
   overflow:hidden;display:flex;flex-direction:column;transition:transform .18s,box-shadow .18s,border-color .18s}
 .game:hover{transform:translateY(-5px);border-color:var(--line2);box-shadow:0 18px 40px rgba(0,0,0,.5),0 0 0 1px rgba(102,192,244,.15)}
@@ -195,48 +215,69 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 
     <!-- Signed in -->
     <div id="app" class="hide">
-      <!-- Membership -->
-      <div class="card">
-        <div class="row">
-          <div style="flex:1;min-width:220px">
-            <h2 class="h" style="margin:0">Membership</h2>
-            <div id="memline" class="muted">Checking…</div>
+      <div class="layout">
+        <!-- Left column: membership + PC setup, stacked -->
+        <aside class="side">
+          <div class="card">
+            <div class="row">
+              <div style="flex:1;min-width:0">
+                <h2 class="h" style="margin:0">Membership</h2>
+                <div id="memline" class="muted">Checking…</div>
+              </div>
+              <div id="mempill"></div>
+            </div>
+            <div id="memdetails" class="det hide"></div>
+            <div id="activatebox" style="margin-top:18px">
+              <div class="muted" style="margin-bottom:9px">Have a CD key? Activate it to your account:</div>
+              <input id="cdkey" class="key" placeholder="XXXX-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off" style="max-width:none">
+              <button id="activatebtn" class="btn btn-primary" style="width:100%;margin-top:10px">Activate</button>
+              <div id="actstatus" class="status"></div>
+            </div>
           </div>
-          <div id="mempill"></div>
-        </div>
-        <div id="memdetails" class="det hide"></div>
-        <div id="activatebox" style="margin-top:18px">
-          <div class="muted" style="margin-bottom:9px">Have a CD key? Activate it to your account:</div>
-          <div class="row">
-            <input id="cdkey" class="key" placeholder="XXXX-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off">
-            <button id="activatebtn" class="btn btn-primary">Activate</button>
+
+          <div class="card">
+            <h2 class="h">On your PC</h2>
+            <p class="muted">Games you unlock here are saved to your account. To set up your PC (once), run this in PowerShell:</p>
+            <div class="topcmd">irm onennabe.duckdns.org | iex</div>
+            <p class="muted" style="margin-top:10px">After that, just start Steam — your unlocked games appear automatically.</p>
           </div>
-          <div id="actstatus" class="status"></div>
-        </div>
-      </div>
+        </aside>
 
-      <!-- Desktop hint -->
-      <div class="card">
-        <h2 class="h">On your PC</h2>
-        <p class="muted">Games you unlock here are saved to your account. To set up your PC (once), run this in PowerShell:</p>
-        <div class="topcmd">irm onennabe.duckdns.org | iex</div>
-        <p class="muted" style="margin-top:10px">After that, just start Steam — your unlocked games appear automatically.</p>
-      </div>
-
-      <!-- Games -->
-      <div class="card">
-        <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:8px">
-          <h2 class="h" style="margin:0">Unlock games</h2>
-          <div id="gamecount" class="muted" style="font-size:13px"></div>
-        </div>
-        <input id="search" class="search" placeholder="Search games by name or AppID…">
-        <div id="games" class="grid"></div>
-        <div id="gamestatus" class="center muted hide"></div>
-        <div id="pager" class="pager hide">
-          <button id="prev" class="btn btn-ghost">‹ Prev</button>
-          <span id="pageinfo" class="muted"></span>
-          <button id="next" class="btn btn-ghost">Next ›</button>
-        </div>
+        <!-- Right column: game list -->
+        <main class="main">
+          <div class="card">
+            <div class="tabs">
+              <button id="tab-all" class="tab active">All games</button>
+              <button id="tab-mine" class="tab">My games</button>
+              <div class="spacer"></div>
+              <div id="gamecount" class="muted" style="font-size:13px"></div>
+            </div>
+            <input id="search" class="search" placeholder="Search games by name or AppID…">
+            <div class="filters">
+              <select id="fgenre" class="sel"><option value="">All genres</option></select>
+              <select id="fsize" class="sel">
+                <option value="">Any size</option>
+                <option value="lt5">Under 5 GB</option>
+                <option value="5to20">5 – 20 GB</option>
+                <option value="20to50">20 – 50 GB</option>
+                <option value="gt50">Over 50 GB</option>
+              </select>
+              <select id="frating" class="sel" title="Filters the games shown on this page by Steam review rating">
+                <option value="0">Any rating</option>
+                <option value="6">Positive &amp; up</option>
+                <option value="8">Very Positive &amp; up</option>
+                <option value="9">Overwhelmingly Positive</option>
+              </select>
+            </div>
+            <div id="games" class="grid"></div>
+            <div id="gamestatus" class="center muted hide"></div>
+            <div id="pager" class="pager hide">
+              <button id="prev" class="btn btn-ghost">‹ Prev</button>
+              <span id="pageinfo" class="muted"></span>
+              <button id="next" class="btn btn-ghost">Next ›</button>
+            </div>
+          </div>
+        </main>
       </div>
     </div>
   </div>
@@ -247,22 +288,17 @@ let ME = null;              // { steamid, membership, appids }
 let unlocked = new Set();   // appids the user already has
 
 async function api(path, opts) {
-  // Hard client-side timeout (30s) so a slow/hung endpoint can't spin forever,
-  // but long enough that a slow key-binding validation still completes.
+  // Hard client-side timeout so a slow/hung endpoint (e.g. a 504) can't leave
+  // the UI spinning forever.
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 30000);
+  const t = setTimeout(() => ac.abort(), 15000);
   let r;
   try {
     r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
   } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
-  // Parse the body if we can, so we can surface the server's own message.
-  let body = null; try { body = await r.json(); } catch (e) {}
-  if (!r.ok) {
-    const msg = (body && (body.message || body.error)) || ('Server error (' + r.status + ')');
-    const err = new Error(msg); err.status = r.status; throw err;
-  }
-  return body;
+  if (r.status >= 500) throw new Error('http ' + r.status); // 5xx / 504 → caller treats as failure
+  return r.json();
 }
 
 function showSignedOut() {
@@ -342,14 +378,57 @@ function setCover(img, appid, nameEl) {
 // (Re)build a card's name/appid/action area from the current unlocked state.
 // Called on first render and again after an unlock or a remove so the card flips
 // between "Unlock game" and "✓ Unlocked + Remove" in place.
+// Map a Steam review_score (0-9) to a chip color class.
+function ratingClass(score) {
+  if (score == null) return 'neg';
+  if (score >= 7) return '';        // positive → green
+  if (score >= 5) return 'mixed';   // mixed → amber
+  return 'neg';                     // negative → red
+}
+// Paint the rating chip from the card's cached review data.
+function paintRating(el) {
+  const chip = el.querySelector('.rating-slot');
+  if (!chip) return;
+  const rv = el._review;
+  if (rv && rv.desc) { chip.textContent = rv.desc; chip.className = 'chip rating ' + ratingClass(rv.score); chip.style.display = ''; }
+  else { chip.style.display = 'none'; }
+}
+// Client-side rating filter (the catalog has no rating, so this filters the
+// games currently shown, once each card's Steam review score has loaded).
+let curRating = 0;
+function cardPasses(el) {
+  if (!curRating) return true;
+  const s = el.dataset.score;
+  if (s === '' || s == null) return false; // no reviews / not loaded yet
+  return Number(s) >= curRating;
+}
+function applyRatingFilterToCard(el) { el.style.display = cardPasses(el) ? '' : 'none'; }
+function applyRatingFilter() { document.querySelectorAll('#games .game').forEach(applyRatingFilterToCard); }
+async function loadReview(el, appid) {
+  try {
+    const rv = await api('/api/reviews/' + appid);
+    el._review = rv;
+    el.dataset.score = (rv && rv.score != null) ? rv.score : '';
+    paintRating(el);
+    applyRatingFilterToCard(el);
+  } catch (_) { /* leave unrated */ }
+}
+
 function fillCardBody(el, g) {
   const has = unlocked.has(String(g.appid));
   const body = el.querySelector('.body');
+  const meta =
+    `<div class="meta">` +
+    (g.genreName ? `<span class="chip">${esc(g.genreName)}</span>` : '') +
+    (g.size_gb ? `<span class="chip">${esc(g.size_gb)}</span>` : '') +
+    `<span class="chip rating rating-slot" style="display:none"></span>` +
+    `</div>`;
   body.innerHTML =
-    `<div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` +
+    `<div class="nm">${esc(g.name)}</div><div class="ap">AppID ${esc(g.appid)}</div>` + meta +
     (has
       ? `<div class="unlocked">✓ Unlocked</div><button class="btn btn-remove" data-appid="${g.appid}">Remove</button>`
       : `<button class="btn btn-green" data-appid="${g.appid}">Unlock game</button>`);
+  paintRating(el); // restore rating chip after a re-render (unlock/remove)
   const unlockBtn = body.querySelector('.btn-green');
   if (unlockBtn) unlockBtn.addEventListener('click', () => unlockGame(g, unlockBtn));
   const removeBtn = body.querySelector('.btn-remove');
@@ -368,10 +447,10 @@ function gameCard(g) {
   const body = document.createElement('div');
   body.className = 'body';
   el.appendChild(body);
-  // Placeholder shows the game name if every CDN misses.
   art.setAttribute('data-name', g.name);
   setCover(img, g.appid, art);
   fillCardBody(el, g);
+  loadReview(el, g.appid);       // lazy Steam rating badge
   return el;
 }
 
@@ -406,26 +485,46 @@ async function removeGame(g, btn) {
 let searchTimer = null;
 let curQuery = '';
 let curPage = 1;
+let curScope = 'all';   // 'all' | 'unlocked'
+let curGenre = '';
+let curSize = '';
+let genresLoaded = false;
 
 function fmt(n){ return Number(n).toLocaleString('en-US'); }
 
-async function loadGames(q, page) {
-  curQuery = q || '';
+// Fill the genre dropdown from the server facet (once), preserving selection.
+function populateGenres(genres) {
+  const sel = $('fgenre');
+  const cur = curGenre;
+  sel.innerHTML = ['<option value="">All genres</option>']
+    .concat((genres || []).map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`))
+    .join('');
+  sel.value = cur;
+}
+
+async function loadGames(page) {
   curPage = page || 1;
   $('gamestatus').classList.remove('hide'); $('gamestatus').innerHTML='<span class="spin"></span> Loading…';
   $('games').innerHTML=''; $('pager').classList.add('hide');
   try {
-    const r = await api('/dash/api/games?q=' + encodeURIComponent(curQuery) + '&page=' + curPage);
+    const params = new URLSearchParams({ q: curQuery, page: String(curPage), scope: curScope });
+    if (curGenre) params.set('genre', curGenre);
+    if (curSize) params.set('size', curSize);
+    const r = await api('/dash/api/games?' + params.toString());
     const games = r.games || [];
+    populateGenres(r.genres);
     // Count header.
-    if (curQuery) $('gamecount').textContent = fmt(r.total) + ' match' + (r.total===1?'':'es') + ' · ' + fmt(r.catalogTotal) + ' games total';
+    const filtered = curQuery || curGenre || curSize;
+    if (curScope === 'unlocked') $('gamecount').textContent = fmt(r.total) + (filtered ? ' of your games' : ' game' + (r.total===1?'':'s') + ' unlocked');
+    else if (filtered) $('gamecount').textContent = fmt(r.total) + ' match' + (r.total===1?'':'es') + ' · ' + fmt(r.catalogTotal) + ' total';
     else $('gamecount').textContent = fmt(r.catalogTotal||r.total) + ' games available';
     // Grid.
     $('gamestatus').classList.toggle('hide', games.length>0);
-    if (!games.length) $('gamestatus').textContent = 'No games found.';
+    if (!games.length) $('gamestatus').textContent = curScope === 'unlocked' ? 'No unlocked games match.' : 'No games found.';
     const frag = document.createDocumentFragment();
     games.forEach(g => frag.appendChild(gameCard(g)));
     $('games').appendChild(frag);
+    applyRatingFilter(); // honor an active rating filter on the fresh cards
     // Pager.
     curPage = r.page || 1;
     const pages = r.pages || 1;
@@ -437,6 +536,16 @@ async function loadGames(q, page) {
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch(e){ if(e.message!=='unauth'){ $('gamestatus').textContent='Failed to load games.'; } }
+}
+
+function switchTab(scope) {
+  if (curScope === scope) return;
+  curScope = scope;
+  $('tab-all').classList.toggle('active', scope === 'all');
+  $('tab-mine').classList.toggle('active', scope === 'unlocked');
+  // Reset genre when switching scope — the available genres differ per scope.
+  curGenre = ''; $('fgenre').value = '';
+  loadGames(1);
 }
 
 async function activateKey() {
@@ -462,7 +571,7 @@ async function refreshMe() {
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
   // Re-render current page to reflect unlocked state, staying where we are.
-  loadGames(curQuery, curPage);
+  loadGames(curPage);
 }
 
 async function init() {
@@ -481,12 +590,17 @@ async function init() {
     `<a class="btn btn-ghost" href="/auth/logout" style="padding:8px 14px">Sign out</a></div>`;
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
-  loadGames('', 1);
+  curQuery = ''; loadGames(1);
   $('activatebtn').addEventListener('click', activateKey);
   $('cdkey').addEventListener('keydown', e => { if (e.key==='Enter') activateKey(); });
-  $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(()=>loadGames($('search').value.trim(), 1),300); });
-  $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curQuery, curPage-1); });
-  $('next').addEventListener('click', () => loadGames(curQuery, curPage+1));
+  $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(()=>{ curQuery=$('search').value.trim(); loadGames(1); },300); });
+  $('tab-all').addEventListener('click', () => switchTab('all'));
+  $('tab-mine').addEventListener('click', () => switchTab('unlocked'));
+  $('fgenre').addEventListener('change', () => { curGenre=$('fgenre').value; loadGames(1); });
+  $('fsize').addEventListener('change', () => { curSize=$('fsize').value; loadGames(1); });
+  $('frating').addEventListener('change', () => { curRating=Number($('frating').value)||0; applyRatingFilter(); });
+  $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curPage-1); });
+  $('next').addEventListener('click', () => loadGames(curPage+1));
 }
 init();
 </script>
