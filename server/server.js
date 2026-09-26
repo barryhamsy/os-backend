@@ -790,6 +790,29 @@ async function suUnlock(params, res) {
 app.get('/api/su/unlock', (req, res) => suUnlock(req.query, res));
 app.post('/api/su/unlock', (req, res) => suUnlock(req.body, res));
 
+// Membership-authorized unlock — no CD key needed. Authorizes by whether the
+// SteamID has an active key (suLookup). Used by the plugin so it doesn't have to
+// read the CD key out of the encrypted SUINABE.dat marker.
+async function suMemberUnlock(params, res) {
+  try {
+    const sid = toSteamId64(String(params.steamid || '').trim());
+    const appId = String(params.appid || '').replace(/\D/g, '');
+    if (!sid || !appId) return res.status(400).json({ success: false, error: 'steamid and appid are required' });
+    const mem = await suLookup(sid);
+    if (!mem.found) return res.status(403).json({ success: false, error: mem.expired ? 'Membership expired' : 'No active membership' });
+    const current = await readUsersJsonAppids(sid);
+    const set = new Set(current.map(String)); set.add(appId);
+    const appids = [...set].sort((a, b) => Number(a) - Number(b));
+    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
+    const result = await putFileToGitHub(`users/${sid}.json`, json, `Member unlock ${appId} for ${sid}`);
+    if (!result.success) return res.status(502).json({ success: false, error: 'Could not record the unlock' });
+    console.log(`[Member Unlock] ${sid} += ${appId} (${appids.length} total)`);
+    res.json({ success: true, appids: appids.map(Number) });
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+}
+app.get('/api/su/member-unlock', (req, res) => suMemberUnlock(req.query, res));
+app.post('/api/su/member-unlock', (req, res) => suMemberUnlock(req.body, res));
+
 // Revoke CDKey: removes the key (active or activated), deletes it from GitHub,
 // and refunds its cost to the reseller who generated it.
 // Admins can revoke any key; resellers can only revoke keys they generated.
@@ -1282,6 +1305,42 @@ app.post('/dash/api/unlock', requireSteam, async (req, res) => {
     console.log(`[Dashboard] ${sid} += ${appId} (${appids.length} total)`);
     res.json({ success: true, appids: appids.map(Number) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── SteamGridDB cover proxy (fills in covers Steam's CDN doesn't have) ────────
+const SGDB_API_KEY = process.env.SGDB_API_KEY || 'a37cf00b6dbbc62bac4650e53e902b46';
+const _sgdbCache = new Map(); // "type_appid" -> resolved image URL (or '' = none)
+
+app.get('/api/sgdb/:type/:appid', async (req, res) => {
+  const appid = String(req.params.appid || '').replace(/\D/g, '');
+  const type = String(req.params.type || 'grid').toLowerCase();
+  if (!appid) return res.status(400).end();
+  const cacheKey = `${type}_${appid}`;
+  if (_sgdbCache.has(cacheKey)) {
+    const u = _sgdbCache.get(cacheKey);
+    return u ? res.redirect(u) : res.status(404).end();
+  }
+  // Map asset type → SGDB endpoint + dimensions.
+  let sgdbType = 'grids', dims = '';
+  if (type === 'grid' || type === 'capsule') { sgdbType = 'grids'; dims = '600x900'; }
+  else if (type === 'header') { sgdbType = 'grids'; dims = '460x215,920x430'; }
+  else if (type === 'hero') { sgdbType = 'heroes'; }
+  else if (type === 'logo') { sgdbType = 'logos'; }
+  let url = `https://www.steamgriddb.com/api/v2/${sgdbType}/steam/${appid}`;
+  if (dims) url += `?dimensions=${dims}`;
+  try {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${SGDB_API_KEY}` } });
+    if (r.ok) {
+      const data = await r.json().catch(() => null);
+      if (data && data.success && Array.isArray(data.data) && data.data.length > 0) {
+        const img = data.data[0].url;
+        _sgdbCache.set(cacheKey, img);
+        return res.redirect(img);
+      }
+    }
+  } catch (e) { /* fall through */ }
+  _sgdbCache.set(cacheKey, ''); // remember the miss so we don't re-query
+  return res.status(404).end();
 });
 
 // Serve the dashboard page (browsers). PowerShell still gets install.ps1 at '/'.
