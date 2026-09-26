@@ -600,7 +600,7 @@ async function suValidate(cd, sid) {
       cd_key: cd, cdkey: cd,
       steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
     }),
-  });
+  }, 25000); // key binding is a write — allow much longer than a plain read
   return await vr.json().catch(() => null);
 }
 
@@ -608,6 +608,39 @@ async function suValidate(cd, sid) {
 // for one-click re-activation. We NEVER expose this whole list to a client — the
 // lookup endpoint below returns only the requesting SteamID's own key.
 const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duckdns.org/api/view-onennabe-cdkeys';
+
+// Cache the full CD-key list. It has thousands of entries and — while fast from
+// the public internet — is slow to pull from GCE, so fetching it on every
+// membership lookup was timing out (→ "NO MEMBERSHIP" / 502). Fetch at most once
+// per few minutes, dedupe concurrent misses, and serve the last good copy if the
+// upstream is slow or down so lookups keep working.
+const KEYLIST_CACHE_MS = 3 * 60 * 1000;
+let keyListCache = { data: null, fetchedAt: 0, pending: null };
+async function getKeyList() {
+  const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
+  if (fresh) return keyListCache.data;
+  if (keyListCache.pending) return keyListCache.pending;
+  keyListCache.pending = (async () => {
+    try {
+      const vr = await fetchT(SU_VIEW_URL, {}, 20000);
+      const data = await vr.json().catch(() => null);
+      const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
+      if (!keys) throw new Error('bad key-list payload');
+      keyListCache.data = keys;
+      keyListCache.fetchedAt = Date.now();
+      return keys;
+    } catch (err) {
+      if (keyListCache.data) {
+        console.error(`[KeyList] refresh failed, serving cached: ${err.message}`);
+        return keyListCache.data;
+      }
+      throw err;
+    } finally {
+      keyListCache.pending = null;
+    }
+  })();
+  return keyListCache.pending;
+}
 
 function suTodayStr() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
@@ -645,9 +678,7 @@ app.get('/api/su/lookup', async (req, res) => {
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
   const sid64 = toSteamId64(sidIn);
   try {
-    const vr = await fetchT(SU_VIEW_URL);
-    const data = await vr.json().catch(() => null);
-    const keys = (data && Array.isArray(data.keys)) ? data.keys : [];
+    const keys = await getKeyList(); // cached; served stale if the upstream is slow
     const today = suTodayStr();
 
     // Every key this SteamID has activated.
@@ -917,7 +948,7 @@ async function getGameCatalog() {
 
   gamesCache.pending = (async () => {
     try {
-      const r = await fetchT(GAMES_API_URL, { headers: { 'User-Agent': 'OST-Server/1.0' } }, 12000);
+      const r = await fetchT(GAMES_API_URL, { headers: { 'User-Agent': 'OST-Server/1.0' } }, 20000);
       if (!r.ok) throw new Error(`Game catalog returned HTTP ${r.status}`);
       const json = await r.json();
       const list = Array.isArray(json) ? json : (json.games || json.data || []);
@@ -1258,9 +1289,7 @@ app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/d
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
 async function suLookup(sid64) {
-  const vr = await fetchT(SU_VIEW_URL);
-  const data = await vr.json().catch(() => null);
-  const keys = (data && Array.isArray(data.keys)) ? data.keys : [];
+  const keys = await getKeyList(); // cached; served stale if the upstream is slow
   const today = suTodayStr();
   const matches = [];
   for (const k of keys) {
