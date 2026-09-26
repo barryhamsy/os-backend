@@ -247,8 +247,16 @@ let ME = null;              // { steamid, membership, appids }
 let unlocked = new Set();   // appids the user already has
 
 async function api(path, opts) {
-  const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+  // Hard client-side timeout so a slow/hung endpoint (e.g. a 504) can't leave
+  // the UI spinning forever.
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 15000);
+  let r;
+  try {
+    r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
+  } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
+  if (!r.ok) throw new Error('http ' + r.status);
   return r.json();
 }
 
@@ -455,7 +463,12 @@ async function refreshMe() {
 async function init() {
   try {
     ME = await api('/dash/api/me');
-  } catch(e) { return; } // 401 already handled → signed-out view
+  } catch(e) {
+    // Any failure (timeout, 504, network) → show the sign-in page rather than a
+    // blank screen. A 401 already switched to the signed-out view.
+    if (e.message !== 'unauth') showSignedOut();
+    return;
+  }
   $('signedout').classList.add('hide');
   $('app').classList.remove('hide');
   $('userbox').innerHTML =

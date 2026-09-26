@@ -11,6 +11,17 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'ost-secret-jwt-key-change-in-production-2026';
 
+// fetch() with a hard timeout. Node's fetch has NO default timeout, so a single
+// slow/hung upstream (the CD-key server, GitHub, Steam, SGDB) can hang a request
+// until the reverse proxy gives up with a 504. Wrapping every external call in a
+// timeout makes it reject fast instead — callers already .catch() and fall back.
+async function fetchT(url, opts = {}, ms = 8000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ac.signal }); }
+  finally { clearTimeout(t); }
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -523,7 +534,7 @@ async function readUsersJsonAppids(sid64) {
   if (!GITHUB_TOKEN) return [];
   try {
     const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/users/${sid64}.json?ref=main`;
-    const r = await fetch(url, {
+    const r = await fetchT(url, {
       headers: {
         'Authorization': `Bearer ${GITHUB_TOKEN}`,
         'User-Agent': 'OST-Server/1.0',
@@ -582,7 +593,7 @@ const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonenn
 // whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
 async function suValidate(cd, sid) {
   const sid64 = sid ? toSteamId64(String(sid)) : '';
-  const vr = await fetch(SU_VALIDATE_URL, {
+  const vr = await fetchT(SU_VALIDATE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -634,7 +645,7 @@ app.get('/api/su/lookup', async (req, res) => {
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
   const sid64 = toSteamId64(sidIn);
   try {
-    const vr = await fetch(SU_VIEW_URL);
+    const vr = await fetchT(SU_VIEW_URL);
     const data = await vr.json().catch(() => null);
     const keys = (data && Array.isArray(data.keys)) ? data.keys : [];
     const today = suTodayStr();
@@ -906,7 +917,7 @@ async function getGameCatalog() {
 
   gamesCache.pending = (async () => {
     try {
-      const r = await fetch(GAMES_API_URL, { headers: { 'User-Agent': 'OST-Server/1.0' } });
+      const r = await fetchT(GAMES_API_URL, { headers: { 'User-Agent': 'OST-Server/1.0' } }, 12000);
       if (!r.ok) throw new Error(`Game catalog returned HTTP ${r.status}`);
       const json = await r.json();
       const list = Array.isArray(json) ? json : (json.games || json.data || []);
@@ -1216,11 +1227,11 @@ app.get('/auth/steam/return', async (req, res) => {
     const verify = new URLSearchParams();
     for (const [k, v] of Object.entries(req.query)) verify.append(k, String(v));
     verify.set('openid.mode', 'check_authentication');
-    const r = await fetch('https://steamcommunity.com/openid/login', {
+    const r = await fetchT('https://steamcommunity.com/openid/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: verify.toString(),
-    });
+    }, 10000);
     const text = await r.text();
     if (!/is_valid\s*:\s*true/i.test(text)) return res.status(401).send('Steam verification failed. <a href="/dashboard">Back</a>');
     const claimed = String(req.query['openid.claimed_id'] || '');
@@ -1237,7 +1248,7 @@ app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/d
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
 async function suLookup(sid64) {
-  const vr = await fetch(SU_VIEW_URL);
+  const vr = await fetchT(SU_VIEW_URL);
   const data = await vr.json().catch(() => null);
   const keys = (data && Array.isArray(data.keys)) ? data.keys : [];
   const today = suTodayStr();
@@ -1367,9 +1378,9 @@ app.get('/api/screenshot/:appid', async (req, res) => {
     return u ? res.redirect(u) : res.status(404).end();
   }
   try {
-    const r = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appid}&filters=screenshots`, {
+    const r = await fetchT(`https://store.steampowered.com/api/appdetails?appids=${appid}&filters=screenshots`, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    }, 6000);
     const data = await r.json().catch(() => null);
     const node = data && data[appid];
     const shots = (node && node.success && node.data && Array.isArray(node.data.screenshots)) ? node.data.screenshots : [];
@@ -1404,7 +1415,7 @@ app.get('/api/sgdb/:type/:appid', async (req, res) => {
   let url = `https://www.steamgriddb.com/api/v2/${sgdbType}/steam/${appid}`;
   if (dims) url += `?dimensions=${dims}`;
   try {
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${SGDB_API_KEY}` } });
+    const r = await fetchT(url, { headers: { Authorization: `Bearer ${SGDB_API_KEY}` } }, 6000);
     if (r.ok) {
       const data = await r.json().catch(() => null);
       if (data && data.success && Array.isArray(data.data) && data.data.length > 0) {
