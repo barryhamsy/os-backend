@@ -204,6 +204,9 @@ function coverCandidates(appid) {
     'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/capsule_616x353.jpg',
     'https://steamcdn-a.akamaihd.net/steam/apps/' + appid + '/library_hero.jpg',
     'https://steamcdn-a.akamaihd.net/steam/apps/' + appid + '/capsule_231x87.jpg',
+    // Last resort: our SteamGridDB proxy — covers games Steam's CDN doesn't have.
+    '/api/sgdb/header/' + appid,
+    '/api/sgdb/grid/' + appid,
   ];
 }
 function setCover(img, appid, nameEl) {
