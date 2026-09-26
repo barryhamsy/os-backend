@@ -247,17 +247,22 @@ let ME = null;              // { steamid, membership, appids }
 let unlocked = new Set();   // appids the user already has
 
 async function api(path, opts) {
-  // Hard client-side timeout so a slow/hung endpoint (e.g. a 504) can't leave
-  // the UI spinning forever.
+  // Hard client-side timeout (30s) so a slow/hung endpoint can't spin forever,
+  // but long enough that a slow key-binding validation still completes.
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 15000);
+  const t = setTimeout(() => ac.abort(), 30000);
   let r;
   try {
     r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
   } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
-  if (r.status >= 500) throw new Error('http ' + r.status); // 5xx / 504 → caller treats as failure
-  return r.json();
+  // Parse the body if we can, so we can surface the server's own message.
+  let body = null; try { body = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    const msg = (body && (body.message || body.error)) || ('Server error (' + r.status + ')');
+    const err = new Error(msg); err.status = r.status; throw err;
+  }
+  return body;
 }
 
 function showSignedOut() {

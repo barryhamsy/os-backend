@@ -22,6 +22,68 @@ async function fetchT(url, opts = {}, ms = 8000) {
   finally { clearTimeout(t); }
 }
 
+// ── Membership unlocks live in SQLite (source of truth) ──────────────────────
+// Writing users/<sid>.json to GitHub on every click hit GitHub's contents-API
+// conflict/secondary-rate limits under rapid unlocking (409 "write conflict").
+// The DB is instant and conflict-free; GitHub is kept only as a debounced backup.
+db.run(`CREATE TABLE IF NOT EXISTS member_unlocks (
+  steamid TEXT NOT NULL,
+  appid   TEXT NOT NULL,
+  added_at INTEGER,
+  PRIMARY KEY (steamid, appid)
+)`).catch((e) => console.error('[member_unlocks] init failed:', e.message));
+
+async function dbGetUnlocks(sid) {
+  const rows = await db.all('SELECT appid FROM member_unlocks WHERE steamid = ?', [String(sid)]);
+  return rows.map((r) => String(r.appid));
+}
+async function dbAddUnlock(sid, appid) {
+  await db.run('INSERT OR IGNORE INTO member_unlocks (steamid, appid, added_at) VALUES (?,?,?)',
+    [String(sid), String(appid), Date.now()]);
+}
+async function dbAddUnlocks(sid, appids) {
+  for (const a of appids) await dbAddUnlock(sid, a);
+}
+async function dbRemoveUnlock(sid, appid) {
+  await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [String(sid), String(appid)]);
+}
+
+// Debounced, best-effort GitHub backup of a user's unlock list. Coalesces a
+// burst of unlocks into ONE commit so we never hammer GitHub. Never on the hot path.
+const _mirrorTimers = new Map();
+function mirrorUserToGitHub(sid) {
+  sid = String(sid);
+  if (_mirrorTimers.has(sid)) return; // one already scheduled — it'll read latest DB state
+  const t = setTimeout(async () => {
+    _mirrorTimers.delete(sid);
+    try {
+      const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+      const json = JSON.stringify({ appids }, null, 2);
+      const r = await putFileToGitHub(`users/${sid}.json`, json, `Sync unlocks for ${sid} (${appids.length})`);
+      if (!r.success) console.warn(`[mirror] ${sid} backup failed: ${String(r.reason).slice(0, 120)}`);
+    } catch (e) { console.error(`[mirror] ${sid} exception: ${e.message}`); }
+  }, 5000);
+  _mirrorTimers.set(sid, t);
+}
+
+// One-time import of an existing GitHub users/<sid>.json into the DB, so we never
+// lose unlocks made before the DB became the source of truth. Returns true when
+// the DB can be treated as authoritative (already had rows, or GitHub read
+// succeeded); false only if GitHub was unreadable and the DB is still empty
+// (so callers skip the backup mirror to avoid clobbering the GitHub copy).
+const _migrated = new Set();
+async function ensureMigrated(sid) {
+  sid = String(sid);
+  if (_migrated.has(sid)) return true;
+  const have = await dbGetUnlocks(sid);
+  if (have.length > 0) { _migrated.add(sid); return true; }
+  const gh = await readUsersJsonFromGitHub(sid); // [] = no file, null = read failed
+  if (gh === null) return false;
+  if (gh.length) await dbAddUnlocks(sid, gh);
+  _migrated.add(sid);
+  return true;
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -569,9 +631,10 @@ async function syncUserEntitlements(steamid) {
 // PUBLIC: Live entitlements for a SteamID, straight from the DB (no GitHub
 // cache). The DLL polls this so a revoke takes effect within one poll cycle.
 // Accepts either the 32-bit AccountID or the 64-bit SteamID64.
-// Read the AppIDs already recorded in users/<steamid64>.json (membership unlocks
-// live here). Returns [] if the file/token is missing.
-async function readUsersJsonAppids(sid64) {
+// Raw GitHub read of users/<sid>.json. Returns an array of appid strings, [] if
+// the file genuinely doesn't exist (404), or null if the read FAILED (token /
+// rate limit / network) — so callers can tell "empty" from "unknown".
+async function readUsersJsonFromGitHub(sid64) {
   if (!GITHUB_TOKEN) return [];
   try {
     const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/users/${sid64}.json?ref=main`;
@@ -581,8 +644,9 @@ async function readUsersJsonAppids(sid64) {
         'User-Agent': 'OST-Server/1.0',
         'Accept': 'application/vnd.github+json',
       },
-    });
-    if (!r.ok) return [];
+    }, 12000);
+    if (r.status === 404) return [];
+    if (!r.ok) return null;
     const j = await r.json();
     const body = Buffer.from(j.content || '', 'base64').toString('utf8');
     let data = null;
@@ -590,7 +654,20 @@ async function readUsersJsonAppids(sid64) {
     let arr = (data && Array.isArray(data.appids)) ? data.appids
             : (Array.isArray(data) ? data : (body.match(/\d{2,10}/g) || []));
     return arr.map((x) => String(x).trim()).filter(Boolean);
-  } catch { return []; }
+  } catch { return null; }
+}
+
+// The membership unlocks for a SteamID — from the DB (source of truth), importing
+// any pre-existing GitHub list once. Never throws; returns appid strings.
+async function readUsersJsonAppids(sid64) {
+  const sid = String(sid64);
+  try {
+    await ensureMigrated(sid);
+    return await dbGetUnlocks(sid);
+  } catch (e) {
+    console.error(`[readUsersJsonAppids] ${sid}: ${e.message}`);
+    return await dbGetUnlocks(sid).catch(() => []);
+  }
 }
 
 const STEAM64_BASE = 76561197960265728n;
@@ -876,19 +953,15 @@ async function suUnlock(params, res) {
       return res.status(403).json({ success: false, error: (vd && vd.message) || 'Membership not active' });
     }
 
-    // 2. Append the AppID to users/<steamid64>.json (dedupe).
-    const current = await readUsersJsonAppids(sid);
-    const set = new Set(current);
-    set.add(appId);
-    const appids = [...set].sort((a, b) => Number(a) - Number(b));
-    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
-    const result = await putFileToGitHub(`users/${sid}.json`, json, `Unlock ${appId} for ${sid}`);
-    if (!result.success) {
-      return res.status(502).json({ success: false, error: ghErrMsg('Could not record the unlock', result) });
-    }
+    // 2. Record the unlock in the DB (source of truth); mirror to GitHub in the
+    // background. Instant and conflict-free even under rapid unlocking.
+    const migrated = await ensureMigrated(sid);
+    await dbAddUnlock(sid, appId);
+    const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+    if (migrated) mirrorUserToGitHub(sid);
 
     console.log(`[SU Unlock] ${sid} += ${appId} (${appids.length} total)`);
-    res.json({ success: true, appids: appids.map(Number) });
+    res.json({ success: true, appids });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -906,14 +979,12 @@ async function suMemberUnlock(params, res) {
     if (!sid || !appId) return res.status(400).json({ success: false, error: 'steamid and appid are required' });
     const mem = await suLookup(sid);
     if (!mem.found) return res.status(403).json({ success: false, error: mem.expired ? 'Membership expired' : 'No active membership' });
-    const current = await readUsersJsonAppids(sid);
-    const set = new Set(current.map(String)); set.add(appId);
-    const appids = [...set].sort((a, b) => Number(a) - Number(b));
-    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
-    const result = await putFileToGitHub(`users/${sid}.json`, json, `Member unlock ${appId} for ${sid}`);
-    if (!result.success) return res.status(502).json({ success: false, error: ghErrMsg('Could not record the unlock', result) });
+    const migrated = await ensureMigrated(sid);
+    await dbAddUnlock(sid, appId);
+    const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+    if (migrated) mirrorUserToGitHub(sid);
     console.log(`[Member Unlock] ${sid} += ${appId} (${appids.length} total)`);
-    res.json({ success: true, appids: appids.map(Number) });
+    res.json({ success: true, appids });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 }
 app.get('/api/su/member-unlock', (req, res) => suMemberUnlock(req.query, res));
@@ -1411,14 +1482,12 @@ app.post('/dash/api/unlock', requireSteam, async (req, res) => {
     if (!appId) return res.status(400).json({ error: 'appid required' });
     const mem = await suLookup(sid);
     if (!mem.found) return res.status(403).json({ error: mem.expired ? 'Your membership has expired.' : 'No active membership — activate a CD key first.' });
-    const current = await readUsersJsonAppids(sid);
-    const set = new Set(current.map(String)); set.add(appId);
-    const appids = [...set].sort((a, b) => Number(a) - Number(b));
-    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
-    const result = await putFileToGitHub(`users/${sid}.json`, json, `Dashboard unlock ${appId} for ${sid}`);
-    if (!result.success) return res.status(502).json({ error: ghErrMsg('Could not record the unlock', result) });
+    const migrated = await ensureMigrated(sid);
+    await dbAddUnlock(sid, appId);
+    const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+    if (migrated) mirrorUserToGitHub(sid);
     console.log(`[Dashboard] ${sid} += ${appId} (${appids.length} total)`);
-    res.json({ success: true, appids: appids.map(Number) });
+    res.json({ success: true, appids });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1430,18 +1499,12 @@ app.post('/dash/api/remove', requireSteam, async (req, res) => {
     const sid = toSteamId64(req.steamid);
     const appId = String((req.body && req.body.appid) || '').replace(/\D/g, '');
     if (!appId) return res.status(400).json({ error: 'appid required' });
-    const current = await readUsersJsonAppids(sid);
-    const set = new Set(current.map(String));
-    if (!set.delete(appId)) {
-      // Not present — idempotent success so the UI just reflects reality.
-      return res.json({ success: true, appids: [...set].map(Number).sort((a, b) => a - b) });
-    }
-    const appids = [...set].sort((a, b) => Number(a) - Number(b));
-    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
-    const result = await putFileToGitHub(`users/${sid}.json`, json, `Dashboard remove ${appId} for ${sid}`);
-    if (!result.success) return res.status(502).json({ error: ghErrMsg('Could not record the removal', result) });
+    const migrated = await ensureMigrated(sid);
+    await dbRemoveUnlock(sid, appId);
+    const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+    if (migrated) mirrorUserToGitHub(sid);
     console.log(`[Dashboard] ${sid} -= ${appId} (${appids.length} total)`);
-    res.json({ success: true, appids: appids.map(Number) });
+    res.json({ success: true, appids });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
