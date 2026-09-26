@@ -602,6 +602,30 @@ function suTodayStr() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 }
 
+// Key-type selection priority for 1-click / auto activation.
+// PREMIUM > STANDARD > MONTHLY > 1DAY. Higher number wins. Unknown types rank
+// lowest (0). Normalized so "1 DAY", "1-day", "one day" all match.
+function suKeyTypeRank(kt) {
+  const t = String(kt || '').toUpperCase().replace(/[\s_\-]+/g, '');
+  if (t === 'PREMIUM') return 4;
+  if (t === 'STANDARD') return 3;
+  if (t === 'MONTHLY') return 2;
+  if (t === '1DAY' || t === 'ONEDAY' || t === 'DAY') return 1;
+  return 0;
+}
+
+// Comparator for picking the best key: highest key-type priority first, then
+// the furthest-out expiry (empty expiry = lifetime = treated as furthest out).
+// Use with Array.sort(...) — best key ends up first.
+function suKeyCompare(a, b) {
+  const byType = suKeyTypeRank(b.key_type) - suKeyTypeRank(a.key_type);
+  if (byType !== 0) return byType;
+  const ax = a.expiry_date ? String(a.expiry_date) : '9999-12-31';
+  const bx = b.expiry_date ? String(b.expiry_date) : '9999-12-31';
+  if (ax === bx) return 0;
+  return ax < bx ? 1 : -1;
+}
+
 // GET /api/su/lookup?steamid=...
 // One-click activation for existing users: finds a key this SteamID has already
 // activated and returns ONLY that user's own key (never anyone else's).
@@ -634,10 +658,10 @@ app.get('/api/su/lookup', async (req, res) => {
       });
     }
 
-    // Prefer a still-valid key with the furthest-out expiry.
+    // Prefer the highest-priority key type, then the furthest-out expiry.
     const active = matches
       .filter((m) => !m.expired)
-      .sort((a, b) => (String(a.expiry_date) < String(b.expiry_date) ? 1 : -1));
+      .sort(suKeyCompare);
     if (active.length) {
       const m = active[0];
       return res.json({
@@ -650,7 +674,7 @@ app.get('/api/su/lookup', async (req, res) => {
     }
     if (matches.length) {
       // Expired — still return the details so the UI can show what expired.
-      const m = matches.sort((a, b) => (String(a.expiry_date) < String(b.expiry_date) ? 1 : -1))[0];
+      const m = matches.slice().sort(suKeyCompare)[0];
       return res.json({
         found: false,
         expired: true,
@@ -1229,9 +1253,9 @@ async function suLookup(sid64) {
       expired: exp ? (exp < today) : false,
     });
   }
-  const active = matches.filter((m) => !m.expired).sort((a, b) => (a.expiry_date < b.expiry_date ? 1 : -1));
+  const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
   if (active.length) return { found: true, ...active[0] };
-  if (matches.length) { const m = matches.sort((a, b) => (a.expiry_date < b.expiry_date ? 1 : -1))[0]; return { found: false, expired: true, ...m }; }
+  if (matches.length) { const m = matches.slice().sort(suKeyCompare)[0]; return { found: false, expired: true, ...m }; }
   return { found: false };
 }
 
