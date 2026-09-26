@@ -450,7 +450,35 @@ async function deleteKeyFromGitHub(cdkey) {
   }
 }
 
+// Per-path write lock: serialize writes to the SAME file so two rapid unlocks
+// can't race on the file's SHA (which caused GitHub 409 conflicts → 502).
+const _ghLocks = new Map(); // filePath -> tail promise
+function withGhLock(key, fn) {
+  const prev = _ghLocks.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn); // run after the previous write settles
+  _ghLocks.set(key, next.catch(() => {}));
+  return next;
+}
+
+// One read-SHA + PUT attempt.
+async function _ghPutOnce(url, headers, contentB64, message) {
+  let sha = null;
+  const checkRes = await fetchT(`${url}?ref=main`, { headers }, 12000);
+  if (checkRes.ok) sha = (await checkRes.json()).sha;
+  const body = { message, content: contentB64, branch: 'main' };
+  if (sha) body.sha = sha;
+  const putRes = await fetchT(url, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 15000);
+  if (putRes.ok) return { ok: true };
+  return { ok: false, status: putRes.status, reason: await putRes.text().catch(() => '') };
+}
+
 // Helper: PUT any file to the GitHub repo (main/<path>), creating or updating it.
+// Serialized per path + retried on conflict / secondary-rate / timeout, so rapid
+// concurrent unlocks to the same users/<sid>.json succeed instead of 502-ing.
 async function putFileToGitHub(filePath, contentString, message) {
   if (!GITHUB_TOKEN) return { success: false, reason: 'No GITHUB_TOKEN configured' };
 
@@ -460,32 +488,30 @@ async function putFileToGitHub(filePath, contentString, message) {
     'User-Agent': 'OST-Server/1.0',
     'Accept': 'application/vnd.github+json'
   };
+  const contentB64 = Buffer.from(contentString).toString('base64');
 
-  try {
-    let sha = null;
-    const checkRes = await fetchT(`${url}?ref=main`, { headers }, 12000);
-    if (checkRes.ok) sha = (await checkRes.json()).sha;
-
-    const body = {
-      message,
-      content: Buffer.from(contentString).toString('base64'),
-      branch: 'main'
-    };
-    if (sha) body.sha = sha;
-
-    const putRes = await fetchT(url, {
-      method: 'PUT',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }, 15000);
-    if (putRes.ok) return { success: true };
-    const reason = await putRes.text().catch(() => '');
-    console.error(`[putFileToGitHub] ${filePath} PUT failed HTTP ${putRes.status}: ${reason.slice(0, 300)}`);
-    return { success: false, status: putRes.status, reason };
-  } catch (err) {
-    console.error(`[putFileToGitHub] ${filePath} exception: ${err.message}`);
-    return { success: false, reason: err.message };
-  }
+  return withGhLock(filePath, async () => {
+    let lastStatus = 0, lastReason = '';
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      try {
+        const r = await _ghPutOnce(url, headers, contentB64, message);
+        if (r.ok) return { success: true };
+        lastStatus = r.status; lastReason = r.reason || '';
+        // 409 = SHA conflict (concurrent write), 422 = stale SHA, 403 = secondary
+        // rate limit — all worth a re-fetch + retry. Anything else, stop.
+        if (r.status === 409 || r.status === 422 || r.status === 403) {
+          await new Promise((res) => setTimeout(res, 400 * attempt));
+          continue;
+        }
+        break;
+      } catch (err) {
+        lastStatus = 0; lastReason = err.message || String(err);
+        await new Promise((res) => setTimeout(res, 400 * attempt));
+      }
+    }
+    console.error(`[putFileToGitHub] ${filePath} failed after retries HTTP ${lastStatus}: ${String(lastReason).slice(0, 300)}`);
+    return { success: false, status: lastStatus, reason: lastReason };
+  });
 }
 
 // Turn a failed putFileToGitHub result into a human-useful message (so a 502
