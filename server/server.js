@@ -26,7 +26,8 @@ app.get('/', (req, res, next) => {
       return res.send(fs.readFileSync(scriptPath, 'utf8'));
     }
   }
-  next();
+  // Browsers → the end-user dashboard.
+  return res.redirect('/dashboard');
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1117,6 +1118,168 @@ app.get('/api/activate', async (req, res) => {
 
   const result = await handleKeyActivation(targetKey, steamid, ip);
   res.status(result.status).json(result.data);
+});
+
+// ==========================================
+// END-USER DASHBOARD (Steam OpenID login + remote game unlocking)
+// ==========================================
+
+const SITE_URL = (process.env.SITE_URL || 'https://onennabe.duckdns.org').replace(/\/+$/, '');
+
+// ── Session cookie (signed JWT, httpOnly) ─────────────────────────────────────
+function setSteamSession(res, steamid64) {
+  const token = jwt.sign({ sid: steamid64, kind: 'steam' }, JWT_SECRET, { expiresIn: '30d' });
+  res.setHeader('Set-Cookie', `dash=${token}; HttpOnly; Path=/; Max-Age=${30 * 24 * 3600}; SameSite=Lax`);
+}
+function clearSteamSession(res) {
+  res.setHeader('Set-Cookie', 'dash=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+}
+function getSteamSession(req) {
+  const cookie = req.headers.cookie || '';
+  const m = cookie.match(/(?:^|;\s*)dash=([^;]+)/);
+  if (!m) return null;
+  try {
+    const d = jwt.verify(decodeURIComponent(m[1]), JWT_SECRET);
+    return (d && d.kind === 'steam') ? String(d.sid) : null;
+  } catch { return null; }
+}
+function requireSteam(req, res, next) {
+  const sid = getSteamSession(req);
+  if (!sid) return res.status(401).json({ error: 'Not signed in' });
+  req.steamid = sid;
+  next();
+}
+
+// ── Steam OpenID 2.0 ──────────────────────────────────────────────────────────
+app.get('/auth/steam', (req, res) => {
+  const params = new URLSearchParams({
+    'openid.ns': 'http://specs.openid.net/auth/2.0',
+    'openid.mode': 'checkid_setup',
+    'openid.return_to': SITE_URL + '/auth/steam/return',
+    'openid.realm': SITE_URL,
+    'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
+    'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select',
+  });
+  res.redirect('https://steamcommunity.com/openid/login?' + params.toString());
+});
+
+app.get('/auth/steam/return', async (req, res) => {
+  try {
+    // Re-post all params to Steam with mode=check_authentication to verify.
+    const verify = new URLSearchParams();
+    for (const [k, v] of Object.entries(req.query)) verify.append(k, String(v));
+    verify.set('openid.mode', 'check_authentication');
+    const r = await fetch('https://steamcommunity.com/openid/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: verify.toString(),
+    });
+    const text = await r.text();
+    if (!/is_valid\s*:\s*true/i.test(text)) return res.status(401).send('Steam verification failed. <a href="/dashboard">Back</a>');
+    const claimed = String(req.query['openid.claimed_id'] || '');
+    const m = claimed.match(/\/id\/(\d{17})$/);
+    if (!m) return res.status(400).send('Could not read SteamID. <a href="/dashboard">Back</a>');
+    setSteamSession(res, m[1]);
+    res.redirect('/dashboard');
+  } catch (e) {
+    res.status(500).send('Auth error. <a href="/dashboard">Back</a>');
+  }
+});
+
+app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/dashboard'); });
+
+// ── Membership lookup helper (shared) ─────────────────────────────────────────
+async function suLookup(sid64) {
+  const vr = await fetch(SU_VIEW_URL);
+  const data = await vr.json().catch(() => null);
+  const keys = (data && Array.isArray(data.keys)) ? data.keys : [];
+  const today = suTodayStr();
+  const matches = [];
+  for (const k of keys) {
+    const ids = Array.isArray(k.steamids) ? k.steamids : [];
+    const mine = ids.find((s) => String(s && s.steamid) === sid64);
+    if (!mine) continue;
+    const exp = String(k.expiry_date || '');
+    matches.push({
+      cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '',
+      activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+      expired: exp ? (exp < today) : false,
+    });
+  }
+  const active = matches.filter((m) => !m.expired).sort((a, b) => (a.expiry_date < b.expiry_date ? 1 : -1));
+  if (active.length) return { found: true, ...active[0] };
+  if (matches.length) { const m = matches.sort((a, b) => (a.expiry_date < b.expiry_date ? 1 : -1))[0]; return { found: false, expired: true, ...m }; }
+  return { found: false };
+}
+
+// ── Dashboard API (session-authenticated) ─────────────────────────────────────
+// Who am I + membership + my unlocked games.
+app.get('/dash/api/me', requireSteam, async (req, res) => {
+  try {
+    const sid = toSteamId64(req.steamid);
+    const [mem, appids] = await Promise.all([
+      suLookup(sid).catch(() => ({ found: false })),
+      readUsersJsonAppids(sid).catch(() => []),
+    ]);
+    res.json({ steamid: sid, membership: mem, appids: appids.map(Number) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Activate a CD key against the signed-in SteamID (binds membership).
+app.post('/dash/api/activate', requireSteam, async (req, res) => {
+  try {
+    const sid = toSteamId64(req.steamid);
+    const cd = String((req.body && req.body.cd_key) || '').trim();
+    if (!cd) return res.status(400).json({ status: 'error', message: 'CD key required' });
+    const vd = await suValidate(cd, sid);
+    if (!vd) return res.status(502).json({ status: 'error', message: 'Validation server error' });
+    return res.json(vd);
+  } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server' }); }
+});
+
+// Search the onennabe catalog (name / appid). Returns cover art for the grid.
+app.get('/dash/api/games', requireSteam, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const games = await getGameCatalog();
+    let results;
+    if (!q) results = games.slice(0, 60);
+    else if (/^\d+$/.test(q)) results = games.filter((g) => g.appid.includes(q)).slice(0, 60);
+    else results = games.filter((g) => g.name.toLowerCase().includes(q)).slice(0, 60);
+    res.json({
+      games: results.map((g) => ({
+        appid: g.appid,
+        name: g.name,
+        cover: `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.appid}/header.jpg`,
+      })),
+    });
+  } catch (e) { res.status(502).json({ error: 'Catalog unavailable' }); }
+});
+
+// Unlock a game remotely — requires an ACTIVE membership on this SteamID.
+app.post('/dash/api/unlock', requireSteam, async (req, res) => {
+  try {
+    const sid = toSteamId64(req.steamid);
+    const appId = String((req.body && req.body.appid) || '').replace(/\D/g, '');
+    if (!appId) return res.status(400).json({ error: 'appid required' });
+    const mem = await suLookup(sid);
+    if (!mem.found) return res.status(403).json({ error: mem.expired ? 'Your membership has expired.' : 'No active membership — activate a CD key first.' });
+    const current = await readUsersJsonAppids(sid);
+    const set = new Set(current.map(String)); set.add(appId);
+    const appids = [...set].sort((a, b) => Number(a) - Number(b));
+    const json = JSON.stringify({ appids: appids.map(Number) }, null, 2);
+    const result = await putFileToGitHub(`users/${sid}.json`, json, `Dashboard unlock ${appId} for ${sid}`);
+    if (!result.success) return res.status(502).json({ error: 'Could not record the unlock' });
+    console.log(`[Dashboard] ${sid} += ${appId} (${appids.length} total)`);
+    res.json({ success: true, appids: appids.map(Number) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Serve the dashboard page (browsers). PowerShell still gets install.ps1 at '/'.
+app.get('/dashboard', (req, res) => {
+  const p = path.join(__dirname, 'public', 'dashboard.html');
+  if (fs.existsSync(p)) { res.type('html'); return res.send(fs.readFileSync(p, 'utf8')); }
+  res.status(404).send('Dashboard not found');
 });
 
 // Start Server
