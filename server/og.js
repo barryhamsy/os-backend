@@ -176,46 +176,85 @@ module.exports = function registerOG(app, ctx) {
   });
 
   // ── PUBLIC: activate an OG key (called by the OneGamers plugin) ───────────────
-  // Body: { cdkey, steamid }. Validates the key, binds it to this SteamID, grants
-  // the bound appid via member_unlocks (the DLL picks it up on its next poll),
-  // and logs the activation. Returns the appid + game name for the success UI.
-  app.post('/api/og/activate', async (req, res) => {
+  // Supports both GET and POST requests (Millennium plugin issues GET to /api/og/activate).
+  // Validates the key, binds it to this SteamID, grants the bound appid via member_unlocks,
+  // and logs the activation. Checks og_keys first, and falls back to legacy keys table if needed.
+  async function handleOGActivate(req, res) {
     try {
-      const cd = String((req.body && req.body.cdkey) || '').trim().toUpperCase();
-      let sid = String((req.body && req.body.steamid) || '').trim();
+      const cd = String((req.body && (req.body.cdkey || req.body.key)) || (req.query && (req.query.cdkey || req.query.key)) || '').trim().toUpperCase();
+      let sid = String((req.body && (req.body.steamid || req.body.steamid64)) || (req.query && (req.query.steamid || req.query.steamid64)) || '').trim();
       if (!cd) return res.status(400).json({ success: false, message: 'CD key required' });
       if (!/^\d{17}$/.test(sid)) sid = toSteamId64(sid);
       if (!/^\d{17}$/.test(sid)) return res.status(400).json({ success: false, message: 'A valid SteamID is required' });
 
+      // 1. Check og_keys first
       const key = await db.get('SELECT * FROM og_keys WHERE cdkey = ?', [cd]);
-      if (!key) return res.status(404).json({ success: false, message: 'Invalid key' });
-      if (key.status === 'disabled') return res.status(403).json({ success: false, message: 'This key has been disabled' });
+      if (key) {
+        if (key.status === 'disabled') return res.status(403).json({ success: false, message: 'This key has been disabled' });
 
-      if (key.status === 'used') {
-        // Idempotent for the same account (re-affirm the unlock); reject reuse elsewhere.
-        if (String(key.activated_by) === sid) {
-          await dbAddUnlock(sid, key.appid);
-          mirrorUserToGitHub(sid);
-          return res.json({ success: true, already: true, appid: key.appid, game_name: key.game_name, message: 'Already activated on this account' });
+        if (key.status === 'used') {
+          if (String(key.activated_by) === sid) {
+            await dbAddUnlock(sid, key.appid);
+            mirrorUserToGitHub(sid);
+            return res.json({ success: true, already: true, appid: key.appid, game_name: key.game_name, message: 'Already activated on this account' });
+          }
+          return res.status(409).json({ success: false, message: 'This key was already used on another account' });
         }
-        return res.status(409).json({ success: false, message: 'This key was already used on another account' });
+
+        const upd = await db.run(
+          "UPDATE og_keys SET status = 'used', activated_by = ?, activated_at = CURRENT_TIMESTAMP WHERE cdkey = ? AND status = 'active'",
+          [sid, cd]
+        );
+        if (!upd.changes) return res.status(409).json({ success: false, message: 'Key is no longer available' });
+
+        await dbAddUnlock(sid, key.appid);
+        mirrorUserToGitHub(sid);
+        const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').slice(0, 64);
+        await db.run('INSERT INTO og_activations (cdkey, steamid, appid, ip_address) VALUES (?,?,?,?)', [cd, sid, key.appid, ip]);
+
+        return res.json({ success: true, appid: key.appid, game_name: key.game_name, message: 'Activated' });
       }
 
-      // Grant. The status guard makes the UPDATE the atomic claim (first writer wins).
-      const upd = await db.run(
-        "UPDATE og_keys SET status = 'used', activated_by = ?, activated_at = CURRENT_TIMESTAMP WHERE cdkey = ? AND status = 'active'",
-        [sid, cd]
-      );
-      if (!upd.changes) return res.status(409).json({ success: false, message: 'Key is no longer available' });
+      // 2. Fallback: check legacy keys table (e.g. OST- keys generated in previous build)
+      const legacyKey = await db.get('SELECT * FROM keys WHERE cdkey = ?', [cd]);
+      if (legacyKey) {
+        if (legacyKey.status === 'disabled') return res.status(403).json({ success: false, message: 'This key has been disabled' });
 
-      await dbAddUnlock(sid, key.appid);
-      mirrorUserToGitHub(sid);
-      const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').slice(0, 64);
-      await db.run('INSERT INTO og_activations (cdkey, steamid, appid, ip_address) VALUES (?,?,?,?)', [cd, sid, key.appid, ip]);
+        if (legacyKey.status === 'used') {
+          if (String(legacyKey.activated_by) === sid) {
+            const appidsList = String(legacyKey.appids || '').split(',').map(a => a.trim()).filter(Boolean);
+            for (const aid of appidsList) {
+              await dbAddUnlock(sid, aid);
+            }
+            mirrorUserToGitHub(sid);
+            return res.json({ success: true, already: true, appid: legacyKey.appids, game_name: legacyKey.game_name, message: 'Already activated on this account' });
+          }
+          return res.status(409).json({ success: false, message: 'This key was already used on another account' });
+        }
 
-      res.json({ success: true, appid: key.appid, game_name: key.game_name, message: 'Activated' });
+        const upd = await db.run(
+          "UPDATE keys SET status = 'used', activated_by = ?, activated_at = CURRENT_TIMESTAMP WHERE cdkey = ? AND status = 'active'",
+          [sid, cd]
+        );
+        if (!upd.changes) return res.status(409).json({ success: false, message: 'Key is no longer available' });
+
+        const appidsList = String(legacyKey.appids || '').split(',').map(a => a.trim()).filter(Boolean);
+        for (const aid of appidsList) {
+          await dbAddUnlock(sid, aid);
+        }
+        mirrorUserToGitHub(sid);
+        const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').slice(0, 64);
+        await db.run('INSERT INTO activations (cdkey, steamid, appids, ip_address) VALUES (?,?,?,?)', [cd, sid, legacyKey.appids, ip]);
+
+        return res.json({ success: true, appid: legacyKey.appids, game_name: legacyKey.game_name || '', message: 'Activated' });
+      }
+
+      return res.status(404).json({ success: false, message: 'Invalid key' });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-  });
+  }
+
+  app.post('/api/og/activate', handleOGActivate);
+  app.get('/api/og/activate', handleOGActivate);
 
   console.log('[og] OneGamers per-game key routes registered (/api/og/*)');
 };

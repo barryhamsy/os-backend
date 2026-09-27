@@ -200,10 +200,11 @@
             <h3>Key Configuration</h3>
             <form id="generator-form">
               <div class="form-group">
-                <label for="gen-product">Product</label>
-                <select id="gen-product" class="form-control">
-                  <option value="og">OneGamers (per-game keys)</option>
-                </select>
+                <label>Product</label>
+                <div class="form-control" style="background: rgba(138, 107, 255, 0.12); color: #c3b4ff; font-weight: 600; cursor: default; border-color: rgba(138, 107, 255, 0.25);">
+                  OneGamers (per-game keys)
+                </div>
+                <input type="hidden" id="gen-product" value="og">
               </div>
 
               <div class="form-group">
@@ -289,9 +290,10 @@
             <input type="text" id="keys-search-input" class="form-control" placeholder="Search CDKey, game, AppID, SteamID...">
           </div>
           <div class="filter-controls">
-            <select id="keys-product" class="form-control">
-              <option value="og">OneGamers keys</option>
-            </select>
+            <div class="form-control" style="background: rgba(138, 107, 255, 0.12); color: #c3b4ff; font-weight: 600; cursor: default; border-color: rgba(138, 107, 255, 0.25); display: inline-flex; align-items: center; width: auto; font-size: 13px; padding: 6px 12px;">
+              OneGamers Keys
+            </div>
+            <input type="hidden" id="keys-product" value="og">
             <select id="keys-status-filter" class="form-control">
               <option value="all">All Statuses</option>
               <option value="active">Active (Unused)</option>

@@ -4,7 +4,7 @@ let state = {
   user: null,
   activeTab: 'overview',
   generatedKeys: [],
-  product: 'onennabe'   // 'onennabe' (OST keys) | 'og' (OneGamers per-game keys)
+  product: 'og'   // 'og' (OneGamers per-game keys)
 };
 
 // API Helper
