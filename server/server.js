@@ -1351,7 +1351,7 @@ app.get('/api/games', authenticateToken, async (req, res) => {
     const fHyper  = String(req.query.hypervisor || '') === '1';
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || req.query.pageSize, 10) || 24, 1), 100);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.query.pageSize, 10) || 24, 1), 100000);
 
     const games = await getGameCatalog();
 

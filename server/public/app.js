@@ -10,7 +10,7 @@ let state = {
   catalogFetchedAt: 0,
 };
 
-const CATALOG_CACHE_KEY = 'ost_catalog_cache_v2';
+const CATALOG_CACHE_KEY = 'ost_catalog_cache_v3';
 const CATALOG_TTL_MS = 30 * 60 * 1000; // 30 minutes client-side cache TTL
 
 function initCatalogCache() {
@@ -18,7 +18,7 @@ function initCatalogCache() {
     const raw = localStorage.getItem(CATALOG_CACHE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.games) && parsed.games.length > 0) {
+      if (parsed && Array.isArray(parsed.games) && parsed.games.length > 500) {
         state.catalogCache = parsed.games;
         state.catalogGenres = parsed.genres || [];
         state.catalogFetchedAt = parsed.fetchedAt || 0;
@@ -685,7 +685,7 @@ async function ensureCatalogLoaded(force = false) {
   }
 
   try {
-    const data = await apiCall('/api/games?limit=5000');
+    const data = await apiCall('/api/games?limit=100000');
     if (data && Array.isArray(data.games)) {
       state.catalogCache = data.games;
       state.catalogGenres = data.genres || [];
