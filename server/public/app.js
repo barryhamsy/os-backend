@@ -66,16 +66,20 @@ function showToast(message, type = 'info') {
 }
 
 // DOM Elements
-const loginScreen = document.getElementById('login-screen');
-const dashboardWrapper = document.getElementById('dashboard-wrapper');
-const loginForm = document.getElementById('login-form');
+function getEl(id) { return document.getElementById(id); }
 
 // Initialize Application
-document.addEventListener('DOMContentLoaded', () => {
+function initApp() {
   initCatalogCache();
   initEventListeners();
   checkAuth();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
 
 // Check Authentication Status
 async function checkAuth() {
@@ -94,21 +98,29 @@ async function checkAuth() {
 }
 
 function showLogin() {
-  loginScreen.classList.remove('hidden');
-  dashboardWrapper.classList.add('hidden');
+  const screen = getEl('login-screen');
+  const dash = getEl('dashboard-wrapper');
+  if (screen) screen.classList.remove('hidden');
+  if (dash) dash.classList.add('hidden');
 }
 
 function showDashboard() {
-  loginScreen.classList.add('hidden');
-  dashboardWrapper.classList.remove('hidden');
+  const screen = getEl('login-screen');
+  const dash = getEl('dashboard-wrapper');
+  if (screen) screen.classList.add('hidden');
+  if (dash) dash.classList.remove('hidden');
 
   // Update navbar user profile
-  document.getElementById('nav-username').textContent = state.user.username;
-  document.getElementById('nav-user-credits').textContent = parseFloat(state.user.credits).toFixed(2);
+  const uEl = getEl('nav-username');
+  const cEl = getEl('nav-user-credits');
+  if (uEl) uEl.textContent = state.user.username;
+  if (cEl) cEl.textContent = parseFloat(state.user.credits || 0).toFixed(2);
 
-  const roleBadge = document.getElementById('nav-role-badge');
-  roleBadge.textContent = state.user.role.toUpperCase();
-  roleBadge.className = `badge badge-${state.user.role}`;
+  const roleBadge = getEl('nav-role-badge');
+  if (roleBadge) {
+    roleBadge.textContent = String(state.user.role || '').toUpperCase();
+    roleBadge.className = `badge badge-${state.user.role}`;
+  }
 
   // Show/Hide Admin Elements
   const adminElements = document.querySelectorAll('.admin-only');
@@ -135,22 +147,27 @@ function logout() {
 // Event Listeners Initialization
 function initEventListeners() {
   // Login Form
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
+  const form = getEl('login-form');
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const uEl = getEl('username');
+      const pEl = getEl('password');
+      const username = uEl ? uEl.value.trim() : '';
+      const password = pEl ? pEl.value : '';
 
-    try {
-      const data = await apiCall('/api/auth/login', 'POST', { username, password });
-      state.token = data.token;
-      state.user = data.user;
-      localStorage.setItem('ost_token', data.token);
-      showToast('Welcome back, ' + data.user.username, 'success');
-      showDashboard();
-    } catch (err) {
-      // Error toasted by apiCall
-    }
-  });
+      try {
+        const data = await apiCall('/api/auth/login', 'POST', { username, password });
+        state.token = data.token;
+        state.user = data.user;
+        localStorage.setItem('ost_token', data.token);
+        showToast('Welcome back, ' + data.user.username, 'success');
+        showDashboard();
+      } catch (err) {
+        // Error toasted by apiCall
+      }
+    });
+  }
 
   // Logout Button
   document.getElementById('logout-btn').addEventListener('click', logout);
@@ -836,9 +853,11 @@ async function searchGames(page = 1) {
 
       loadGameInfo(card, g.appid);
     });
+  } catch (err) {
+    if (seq === gameSearchSeq) {
+      box.innerHTML = `<div class="game-results-empty">Could not load game list. Try refreshing.</div>`;
+    }
   }
-
-  renderCatalogGrid();
 }
 
 function selectGame(appid, name) {
