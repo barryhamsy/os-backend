@@ -701,6 +701,59 @@ app.get('/api/entitlements/:steamid', async (req, res) => {
   }
 });
 
+// Global manifest epoch. Bump it (POST /api/manifest/bump) after pushing new
+// .lua / manifest ids to GitHub to force every running DLL to re-check its
+// injected games on the next 2s tick. In-memory is fine: a process restart just
+// makes every client refresh once, which is safe (drop-safe, hash-gated).
+let _manifestEpoch = 0;
+
+// PUBLIC: tiny per-user version string the DLL polls every 2s. It is the cheap
+// fast-path probe — no GitHub — and changes whenever the user's unlock set
+// changes (a new key activation or a member_unlocks row) or the manifest epoch
+// is bumped. When it changes, the DLL runs a full sync + manifest refresh.
+// Mirrors the exact sources /api/entitlements unions (keys for both the 32- and
+// 64-bit id, member_unlocks for the SteamID64).
+app.get('/api/entitlements-version/:steamid', async (req, res) => {
+  try {
+    let id = String(req.params.steamid).trim();
+    const candidates = new Set([id]);
+    try {
+      const n = BigInt(id);
+      if (n > STEAM64_BASE) candidates.add(String(n - STEAM64_BASE)); // 64 -> 32
+      else candidates.add(String(n + STEAM64_BASE));                  // 32 -> 64
+    } catch { /* non-numeric, ignore */ }
+    const cand = [...candidates];
+    const placeholders = cand.map(() => '?').join(',');
+
+    const krow = await db.get(
+      `SELECT COUNT(*) AS n, COALESCE(MAX(activated_at), '') AS mx
+         FROM keys WHERE activated_by IN (${placeholders}) AND status = 'used'`,
+      cand
+    ).catch(() => ({ n: 0, mx: '' }));
+
+    const mrow = await db.get(
+      "SELECT COUNT(*) AS n, COALESCE(MAX(added_at), 0) AS mx FROM member_unlocks WHERE steamid = ?",
+      [String(toSteamId64(id))]
+    ).catch(() => ({ n: 0, mx: 0 }));
+
+    const v = `${krow.n}:${krow.mx}:${mrow.n}:${mrow.mx}:${_manifestEpoch}`;
+    res.set('Cache-Control', 'no-store');
+    res.json({ v });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bump the manifest epoch so every client re-checks injected .lua within ~2s.
+// Optional shared-secret guard: set MANIFEST_BUMP_KEY in the env and pass ?key=.
+app.post('/api/manifest/bump', (req, res) => {
+  const need = process.env.MANIFEST_BUMP_KEY;
+  if (need && String(req.query.key || '') !== need)
+    return res.status(403).json({ error: 'forbidden' });
+  _manifestEpoch = Date.now();
+  res.json({ ok: true, epoch: _manifestEpoch });
+});
+
 // Steam Unlock membership. Validation lives at steamunlockonennabe; the plugin's
 // Lua backend can only reliably send GET query params (not POST bodies), so these
 // are GET endpoints and os-backend does the proper server-to-server POST.
