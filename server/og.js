@@ -17,7 +17,8 @@
 module.exports = function registerOG(app, ctx) {
   const {
     db, authenticateToken, requireAdmin,
-    dbAddUnlock, mirrorUserToGitHub, toSteamId64,
+    dbAddUnlock, dbRemoveUnlock, mirrorUserToGitHub,
+    commitKeyToGitHub, deleteKeyFromGitHub, toSteamId64,
   } = ctx;
 
   const CREDIT_PER_KEY = 1.0;
@@ -91,6 +92,9 @@ module.exports = function registerOG(app, ctx) {
           `INSERT INTO og_keys (cdkey, appid, game_name, created_by, cost, status) VALUES (?,?,?,?,?, 'active')`,
           [k, appid, game_name, req.user.id, CREDIT_PER_KEY]
         );
+        if (typeof commitKeyToGitHub === 'function') {
+          commitKeyToGitHub(k, appid);
+        }
         keys.push({ cdkey: k, appid, game_name, cost: CREDIT_PER_KEY });
       }
 
@@ -165,6 +169,89 @@ module.exports = function registerOG(app, ctx) {
       q += ' ORDER BY a.activated_at DESC LIMIT 1000';
       res.json({ activations: await db.all(q, p) });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Reseller & Admin: Revoke OG key ──────────────────────────────────────────
+  // Revokes a key: deletes from DB, refunds reseller credits, deletes keys/<cdkey>.txt
+  // from GitHub, and revokes the unlocked appid from the customer's SteamID entitlements.
+  app.post('/api/og/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
+    try {
+      const cdkey = String(req.params.cdkey).trim().toUpperCase();
+
+      // Check og_keys first
+      let keyRecord = await db.get('SELECT * FROM og_keys WHERE cdkey = ?', [cdkey]);
+      let isOG = true;
+
+      if (!keyRecord) {
+        // Fallback to keys table
+        keyRecord = await db.get('SELECT * FROM keys WHERE cdkey = ?', [cdkey]);
+        isOG = false;
+      }
+
+      if (!keyRecord) {
+        return res.status(404).json({ error: 'CDKey not found' });
+      }
+
+      // Permission check: admins can revoke any key; resellers can only revoke their own keys
+      if (req.user.role !== 'admin' && keyRecord.created_by !== req.user.id) {
+        return res.status(403).json({ error: 'You can only revoke keys you generated' });
+      }
+
+      // Atomic DB deletion
+      const tableName = isOG ? 'og_keys' : 'keys';
+      const del = await db.run(`DELETE FROM ${tableName} WHERE id = ?`, [keyRecord.id]);
+      if (del.changes !== 1) {
+        return res.status(409).json({ error: 'CDKey was already revoked' });
+      }
+
+      // Refund credits if created by reseller
+      let refunded = 0;
+      let refundedTo = null;
+      const creator = await db.get('SELECT id, username, role FROM users WHERE id = ?', [keyRecord.created_by]);
+      if (creator && creator.role === 'reseller' && keyRecord.cost > 0) {
+        refunded = keyRecord.cost;
+        refundedTo = creator.username;
+        await db.run('UPDATE users SET credits = credits + ? WHERE id = ?', [refunded, creator.id]);
+        await db.run(
+          `INSERT INTO topup_logs (reseller_id, admin_id, amount, note) VALUES (?, ?, ?, ?)`,
+          [creator.id, req.user.id, refunded, `Refund: revoked ${keyRecord.status === 'used' ? 'activated' : 'unused'} key ${cdkey}`]
+        );
+      }
+
+      // Delete keys/<cdkey>.txt from GitHub repository
+      let github = { success: false };
+      if (typeof deleteKeyFromGitHub === 'function') {
+        github = await deleteKeyFromGitHub(cdkey);
+      }
+
+      // If key had been activated, remove the appid from member_unlocks & update GitHub entitlements
+      if (keyRecord.activated_by) {
+        const sid = String(keyRecord.activated_by);
+        if (isOG) {
+          if (keyRecord.appid && typeof dbRemoveUnlock === 'function') {
+            await dbRemoveUnlock(sid, keyRecord.appid);
+          }
+        } else {
+          const appidsList = String(keyRecord.appids || '').split(',').map(a => a.trim()).filter(Boolean);
+          if (typeof dbRemoveUnlock === 'function') {
+            for (const aid of appidsList) {
+              await dbRemoveUnlock(sid, aid);
+            }
+          }
+        }
+        if (typeof mirrorUserToGitHub === 'function') {
+          mirrorUserToGitHub(sid);
+        }
+      }
+
+      let message = `Revoked ${cdkey}`;
+      if (refundedTo) message += ` and refunded ${refunded.toFixed(2)} credits to ${refundedTo}`;
+      if (github && !github.success) message += `. (GitHub note: ${github.reason || 'could not remove key file'})`;
+
+      res.json({ message, refunded, refunded_to: refundedTo, github });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ── Admin: disable / revoke a key ────────────────────────────────────────────

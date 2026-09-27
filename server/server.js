@@ -1836,7 +1836,8 @@ app.get(['/admin', '/reseller'], (req, res) => {
 // Kept in its own module so a server.js revert can't silently drop it.
 require('./og')(app, {
   db, authenticateToken, requireAdmin,
-  dbAddUnlock, mirrorUserToGitHub, toSteamId64,
+  dbAddUnlock, dbRemoveUnlock, mirrorUserToGitHub,
+  commitKeyToGitHub, deleteKeyFromGitHub, toSteamId64,
 });
 
 // Start Server
