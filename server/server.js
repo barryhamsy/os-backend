@@ -342,18 +342,45 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const totalResellersRow = await db.get("SELECT count(*) as count FROM users WHERE role = 'reseller'");
-    const totalKeysRow = await db.get("SELECT count(*) as count FROM keys");
-    const activeKeysRow = await db.get("SELECT count(*) as count FROM keys WHERE status = 'active'");
-    const usedKeysRow = await db.get("SELECT count(*) as count FROM keys WHERE status = 'used'");
-    const totalActivationsRow = await db.get("SELECT count(*) as count FROM activations");
+    const totalKeysRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_keys) + 
+        (SELECT COUNT(*) FROM keys)
+      ) as count
+    `);
+    const activeKeysRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_keys WHERE status = 'active') + 
+        (SELECT COUNT(*) FROM keys WHERE status = 'active')
+      ) as count
+    `);
+    const usedKeysRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_keys WHERE status = 'used') + 
+        (SELECT COUNT(*) FROM keys WHERE status = 'used')
+      ) as count
+    `);
+    const totalActivationsRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_activations) + 
+        (SELECT COUNT(*) FROM activations)
+      ) as count
+    `);
     const sumCreditsRow = await db.get("SELECT SUM(credits) as sum FROM users WHERE role = 'reseller'");
 
     const recentActivations = await db.all(`
-      SELECT a.*, k.created_by, u.username as creator_name 
-      FROM activations a 
-      LEFT JOIN keys k ON a.cdkey = k.cdkey 
-      LEFT JOIN users u ON k.created_by = u.id 
-      ORDER BY a.activated_at DESC LIMIT 10
+      SELECT cdkey, steamid, appids, creator_name, activated_at FROM (
+        SELECT a.cdkey, a.steamid, a.appids, a.activated_at, COALESCE(u.username, 'System') as creator_name
+        FROM activations a
+        LEFT JOIN keys k ON a.cdkey = k.cdkey
+        LEFT JOIN users u ON k.created_by = u.id
+        UNION ALL
+        SELECT oa.cdkey, oa.steamid, oa.appid as appids, oa.activated_at, COALESCE(u.username, 'System') as creator_name
+        FROM og_activations oa
+        LEFT JOIN og_keys ok ON oa.cdkey = ok.cdkey
+        LEFT JOIN users u ON ok.created_by = u.id
+      )
+      ORDER BY activated_at DESC LIMIT 10
     `);
 
     res.json({
@@ -1557,16 +1584,50 @@ app.get('/api/keys/my-keys', authenticateToken, async (req, res) => {
 // Get Reseller Stats
 app.get('/api/reseller/stats', authenticateToken, async (req, res) => {
   try {
-    const user = await db.get('SELECT credits FROM users WHERE id = ?', [req.user.id]);
-    const totalKeysRow = await db.get('SELECT count(*) as count FROM keys WHERE created_by = ?', [req.user.id]);
-    const activeKeysRow = await db.get("SELECT count(*) as count FROM keys WHERE created_by = ? AND status = 'active'", [req.user.id]);
-    const usedKeysRow = await db.get("SELECT count(*) as count FROM keys WHERE created_by = ? AND status = 'used'", [req.user.id]);
+    const userId = req.user.id;
+    const user = await db.get('SELECT credits FROM users WHERE id = ?', [userId]);
+    const totalKeysRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_keys WHERE created_by = ?) + 
+        (SELECT COUNT(*) FROM keys WHERE created_by = ?)
+      ) as count
+    `, [userId, userId]);
+    const activeKeysRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_keys WHERE status = 'active' AND created_by = ?) + 
+        (SELECT COUNT(*) FROM keys WHERE status = 'active' AND created_by = ?)
+      ) as count
+    `, [userId, userId]);
+    const usedKeysRow = await db.get(`
+      SELECT (
+        (SELECT COUNT(*) FROM og_keys WHERE status = 'used' AND created_by = ?) + 
+        (SELECT COUNT(*) FROM keys WHERE status = 'used' AND created_by = ?)
+      ) as count
+    `, [userId, userId]);
+
+    const recentActivations = await db.all(`
+      SELECT cdkey, steamid, appids, creator_name, activated_at FROM (
+        SELECT a.cdkey, a.steamid, a.appids, a.activated_at, COALESCE(u.username, 'System') as creator_name
+        FROM activations a
+        INNER JOIN keys k ON a.cdkey = k.cdkey
+        INNER JOIN users u ON k.created_by = u.id
+        WHERE k.created_by = ?
+        UNION ALL
+        SELECT oa.cdkey, oa.steamid, oa.appid as appids, oa.activated_at, COALESCE(u.username, 'System') as creator_name
+        FROM og_activations oa
+        INNER JOIN og_keys ok ON oa.cdkey = ok.cdkey
+        INNER JOIN users u ON ok.created_by = u.id
+        WHERE ok.created_by = ?
+      )
+      ORDER BY activated_at DESC LIMIT 10
+    `, [userId, userId]);
 
     res.json({
-      credits: user.credits,
+      credits: user ? user.credits : 0,
       totalKeys: totalKeysRow ? totalKeysRow.count : 0,
       activeKeys: activeKeysRow ? activeKeysRow.count : 0,
-      usedKeys: usedKeysRow ? usedKeysRow.count : 0
+      usedKeys: usedKeysRow ? usedKeysRow.count : 0,
+      recentActivations
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
