@@ -1286,65 +1286,109 @@ function sizeBucket(gb) {
   return 'gt50';
 }
 
-async function getGameCatalog() {
-  const fresh = gamesCache.data && (Date.now() - gamesCache.fetchedAt < GAMES_CACHE_MS);
-  if (fresh) return gamesCache.data;
-  if (gamesCache.pending) return gamesCache.pending;
+const CATALOG_CACHE_FILE = path.join(__dirname, 'catalog_cache.json');
 
+// Turn the raw upstream list into our slim catalog shape + genre facet.
+function _buildCatalog(list) {
+  const data = list
+    // Drop membership-only catalog entries entirely — they aren't unlockable here.
+    .filter(g => g && g.appid && g.name && g.requires_membership !== true)
+    .map(g => {
+      const gid = String(g.primary_genre || '').trim();
+      const gb = parseSizeGB(g.size_gb);
+      return {
+        appid: String(g.appid),
+        name: String(g.name),
+        genre: gid,
+        genreName: genreName(gid),
+        size_gb: String(g.size_gb || ''),
+        sizeGB: gb,
+        sizeBucket: sizeBucket(gb),
+        adult: isAdultGame(g),
+        online_supported: _yesFlag(g.online_supported),
+        bypass_supported: _yesFlag(g.bypass_supported),
+        hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
+      };
+    });
+  const genreSet = new Map();
+  for (const g of data) if (g.genre) genreSet.set(g.genre, g.genreName);
+  const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { data, genres };
+}
+
+function _applyCatalog(data, genres, fetchedAt) {
+  gamesCache.data = data;
+  gamesCache.byId = new Map(data.map(g => [g.appid, g]));
+  gamesCache.genres = genres || [];
+  gamesCache.fetchedAt = fetchedAt || Date.now();
+}
+
+// Seed from disk on boot, so a cold start (or an upstream outage) serves the grid
+// instantly instead of blocking or 502-ing. Marked stale so a refresh still runs.
+(function loadCatalogFromDisk() {
+  try {
+    if (fs.existsSync(CATALOG_CACHE_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(CATALOG_CACHE_FILE, 'utf8'));
+      if (saved && Array.isArray(saved.data) && saved.data.length) {
+        _applyCatalog(saved.data, saved.genres || [], saved.fetchedAt || 0);
+        console.log(`[Game Catalog] Seeded ${saved.data.length} games from disk cache`);
+      }
+    }
+  } catch (e) { console.error('[Game Catalog] disk load failed:', e.message); }
+})();
+
+// The upstream fetch. Concurrent callers share one in-flight request.
+function refreshCatalog() {
+  if (gamesCache.pending) return gamesCache.pending;
   gamesCache.pending = (async () => {
     try {
       const r = await fetchT(GAMES_API_URL, { headers: { 'User-Agent': 'OST-Server/1.0' } }, 20000);
       if (!r.ok) throw new Error(`Game catalog returned HTTP ${r.status}`);
       const json = await r.json();
       const list = Array.isArray(json) ? json : (json.games || json.data || []);
-      // Keep only what we need — name for the grid, plus the patch flags so
-      // /api/patch-info can answer from cache instead of re-fetching the whole
-      // catalog on every call (that per-game hammering is what crashed the server).
-      const data = list
-        // Drop membership-only catalog entries entirely — they aren't unlockable here.
-        .filter(g => g && g.appid && g.name && g.requires_membership !== true)
-        .map(g => {
-          const gid = String(g.primary_genre || '').trim();
-          const gb = parseSizeGB(g.size_gb);
-          return {
-            appid: String(g.appid),
-            name: String(g.name),
-            genre: gid,
-            genreName: genreName(gid),
-            size_gb: String(g.size_gb || ''),
-            sizeGB: gb,
-            sizeBucket: sizeBucket(gb),
-            adult: isAdultGame(g),
-            online_supported: _yesFlag(g.online_supported),
-            bypass_supported: _yesFlag(g.bypass_supported),
-            hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
-          };
-        });
-
-      const genreSet = new Map();
-      for (const g of data) if (g.genre) genreSet.set(g.genre, g.genreName);
-      const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-
-      gamesCache.data = data;
-      gamesCache.byId = new Map(data.map(g => [g.appid, g]));
-      gamesCache.genres = genres;
-      gamesCache.fetchedAt = Date.now();
+      const { data, genres } = _buildCatalog(list);
+      if (!data.length) throw new Error('upstream returned an empty catalog');
+      _applyCatalog(data, genres, Date.now());
+      try {
+        fs.writeFileSync(CATALOG_CACHE_FILE, JSON.stringify({ data, genres, fetchedAt: gamesCache.fetchedAt }));
+      } catch (e) { /* disk cache is best-effort */ }
       return gamesCache.data;
-    } catch (err) {
-      // Serve stale data if we have it
-      if (gamesCache.data) {
-        console.error(`[Game Catalog] Refresh failed, serving cached list: ${err.message}`);
-        return gamesCache.data;
-      }
-      throw err;
     } finally {
       gamesCache.pending = null;
     }
   })();
-
   return gamesCache.pending;
 }
+
+// Non-blocking getter with stale-while-revalidate:
+//   • fresh cache           → return immediately
+//   • stale cache with data → return stale NOW, refresh in the background
+//   • no data at all        → wait for one fetch (rare — disk seeds it)
+// A request NEVER waits on the upstream once we have any data, so the grid loads
+// instantly and an upstream hiccup can't 502 the list.
+async function getGameCatalog() {
+  const fresh = gamesCache.data && (Date.now() - gamesCache.fetchedAt < GAMES_CACHE_MS);
+  if (fresh) return gamesCache.data;
+
+  if (gamesCache.data) {
+    refreshCatalog().catch(err =>
+      console.error(`[Game Catalog] background refresh failed, keeping cached list: ${err.message}`));
+    return gamesCache.data;
+  }
+
+  try {
+    return await refreshCatalog();
+  } catch (err) {
+    console.error(`[Game Catalog] initial load failed: ${err.message}`);
+    return gamesCache.data || [];   // empty rather than throwing → no 502
+  }
+}
+
+// Keep the cache warm so no user request ever waits on the upstream, and warm
+// once shortly after boot (deferred so it never blocks startup).
+setInterval(() => { refreshCatalog().catch(() => {}); }, GAMES_CACHE_MS);
+setTimeout(() => { refreshCatalog().catch(() => {}); }, 2000);
 
 // Search games by name or AppID (with full catalog pagination & filters)
 app.get('/api/games', authenticateToken, async (req, res) => {
