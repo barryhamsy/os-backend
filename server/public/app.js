@@ -265,35 +265,44 @@ function initEventListeners() {
       // Update credits in UI
       if (data.remaining_credits !== undefined) {
         state.user.credits = data.remaining_credits;
-        document.getElementById('nav-user-credits').textContent = parseFloat(data.remaining_credits).toFixed(2);
+        const credEl = getEl('nav-user-credits');
+        if (credEl) credEl.textContent = parseFloat(data.remaining_credits).toFixed(2);
       }
 
-      // Display keys in output box
-      const outputBox = document.getElementById('gen-output-textarea');
-      outputBox.value = data.keys.map(k => k.cdkey).join('\n');
+      // Populate keys in popup modal
+      const modalTextarea = getEl('gen-modal-textarea');
+      const subtitle = getEl('gen-modal-subtitle');
+      if (modalTextarea) modalTextarea.value = data.keys.map(k => k.cdkey).join('\n');
+      if (subtitle) subtitle.textContent = `${data.keys.length} key(s) generated for "${game_name || appids}"`;
 
-      document.getElementById('btn-copy-raw').disabled = false;
-      document.getElementById('btn-copy-protocol').disabled = false;
+      // Auto-copy key(s) to clipboard
+      if (data.keys.length > 0) {
+        const rawText = data.keys.map(k => k.cdkey).join('\n');
+        navigator.clipboard.writeText(rawText).catch(() => {});
+      }
 
-      showToast(`Generated ${data.keys.length} CDKey(s) successfully!`, 'success');
+      // Show generated keys popup modal
+      getEl('modal-generated-keys')?.classList.remove('hidden');
+
+      showToast(`Generated & copied ${data.keys.length} CDKey(s)!`, 'success');
     } catch (err) {
       // Error toasted
     }
   });
 
   // Copy Buttons
-  document.getElementById('btn-copy-raw').addEventListener('click', () => {
-    if (state.generatedKeys.length === 0) return;
+  getEl('btn-copy-raw')?.addEventListener('click', () => {
+    if (!state.generatedKeys || state.generatedKeys.length === 0) return;
     const rawText = state.generatedKeys.map(k => k.cdkey).join('\n');
     navigator.clipboard.writeText(rawText);
-    showToast('Copied raw keys to clipboard!', 'success');
+    showToast('Copied key(s) to clipboard!', 'success');
   });
 
-  document.getElementById('btn-copy-protocol').addEventListener('click', () => {
-    if (state.generatedKeys.length === 0) return;
+  getEl('btn-copy-protocol')?.addEventListener('click', () => {
+    if (!state.generatedKeys || state.generatedKeys.length === 0) return;
     const links = state.generatedKeys.map(k => `ostactivation://${k.cdkey}`).join('\n');
     navigator.clipboard.writeText(links);
-    showToast('Copied protocol activation links!', 'success');
+    showToast('Copied direct links to clipboard!', 'success');
   });
 
   // Search & Filters for Keys Manager

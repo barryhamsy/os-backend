@@ -244,25 +244,6 @@
                 </button>
               </form>
             </div>
-
-            <!-- GENERATED KEYS RESULTS -->
-            <div class="glass-card flex-column">
-              <div class="flex-between align-center mb-3">
-                <h3>Generated Results</h3>
-                <div class="btn-group">
-                  <button id="btn-copy-raw" class="btn btn-sm btn-secondary" disabled>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    <span>Copy Keys</span>
-                  </button>
-                  <button id="btn-copy-protocol" class="btn btn-sm btn-outline" disabled>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-                    <span>Copy Direct Links</span>
-                  </button>
-                </div>
-              </div>
-
-              <textarea id="gen-output-textarea" class="code-output flex-1" placeholder="Generated keys will appear here..." readonly></textarea>
-            </div>
           </div>
 
           <!-- RIGHT COLUMN: MAIN GAME CATALOG (Replicated from dashboard.html) -->
@@ -495,6 +476,38 @@
           <button type="submit" class="btn btn-primary">Confirm Topup</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- MODAL: GENERATED KEYS POPUP -->
+  <div id="modal-generated-keys" class="modal-overlay hidden">
+    <div class="modal-card glass-card" style="max-width: 520px; width: 92%;">
+      <div class="modal-header">
+        <div>
+          <h3 style="display: flex; align-items: center; gap: 8px; font-size: 1.15rem; margin: 0;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            <span>CDKey(s) Generated!</span>
+          </h3>
+          <p id="gen-modal-subtitle" class="text-muted" style="font-size: 0.8125rem; margin: 4px 0 0;"></p>
+        </div>
+        <button type="button" class="modal-close modal-close-btn">&times;</button>
+      </div>
+      <div style="padding: 1.25rem 0 0.5rem;">
+        <textarea id="gen-modal-textarea" class="code-output" style="width: 100%; min-height: 120px; max-height: 240px; font-size: 0.95rem; line-height: 1.7; border-radius: var(--radius-sm);" readonly></textarea>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+        <div style="display: flex; gap: 8px;">
+          <button type="button" id="btn-copy-raw" class="btn btn-primary btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span>Copy Key(s)</span>
+          </button>
+          <button type="button" id="btn-copy-protocol" class="btn btn-secondary btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+            <span>Direct Links</span>
+          </button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm modal-close-btn">Done</button>
+      </div>
     </div>
   </div>
 
