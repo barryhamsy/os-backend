@@ -1339,31 +1339,68 @@ async function getGameCatalog() {
   return gamesCache.pending;
 }
 
-// Search games by name or AppID
+// Search games by name or AppID (with full catalog pagination & filters)
 app.get('/api/games', authenticateToken, async (req, res) => {
   try {
-    const q = String(req.query.search || '').trim().toLowerCase();
+    const q = String(req.query.search || req.query.q || '').trim().toLowerCase();
+    const genre = String(req.query.genre || '').trim();       // genre id, '' = any
+    const size = String(req.query.size || '').trim();         // bucket key, '' = any
+    const showAdult = String(req.query.adult || '1') !== '0'; // show 18+ unless explicitly hidden
+    const fOnline = String(req.query.online || '') === '1';
+    const fBypass = String(req.query.bypass || '') === '1';
+    const fHyper  = String(req.query.hypervisor || '') === '1';
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.query.pageSize, 10) || 24, 1), 100);
+
     const games = await getGameCatalog();
 
-    let results;
-    if (!q) {
-      results = games.slice(0, 30);
-    } else if (/^\d+$/.test(q)) {
-      results = games.filter(g => g.appid.startsWith(q))
-        .sort((a, b) => (a.appid === q ? -1 : b.appid === q ? 1 : 0));
-    } else {
-      results = games.filter(g => g.name.toLowerCase().includes(q))
-        .sort((a, b) => {
-          const as = a.name.toLowerCase().startsWith(q), bs = b.name.toLowerCase().startsWith(q);
-          return as === bs ? 0 : as ? -1 : 1;
-        });
-    }
+    let pool = showAdult ? games : games.filter((g) => !g.adult);
+    let matches = pool;
 
-    res.json({ total: games.length, games: results.slice(0, 50) });
+    if (q) {
+      matches = /^\d+$/.test(q)
+        ? matches.filter((g) => g.appid.includes(q))
+        : matches.filter((g) => g.name.toLowerCase().includes(q));
+    }
+    if (genre) matches = matches.filter((g) => g.genre === genre);
+    if (size) matches = matches.filter((g) => g.sizeBucket === size);
+    if (fOnline) matches = matches.filter((g) => g.online_supported);
+    if (fBypass) matches = matches.filter((g) => g.bypass_supported);
+    if (fHyper)  matches = matches.filter((g) => g.hypervisor_bypass);
+
+    const total = matches.length;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const curPage = Math.min(Math.max(page, 1), pages);
+    const slice = matches.slice((curPage - 1) * limit, curPage * limit);
+
+    const genreSet = new Map();
+    for (const g of pool) if (g.genre) genreSet.set(g.genre, g.genreName);
+    const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      total, page: curPage, pages, limit, catalogTotal: games.length,
+      genres,
+      games: slice.map((g) => ({
+        appid: g.appid,
+        name: g.name,
+        genre: g.genre,
+        genreName: g.genreName,
+        size_gb: g.size_gb,
+        sizeGB: g.sizeGB,
+        sizeBucket: g.sizeBucket,
+        adult: g.adult,
+        online_supported: g.online_supported,
+        bypass_supported: g.bypass_supported,
+        hypervisor_bypass: g.hypervisor_bypass,
+      })),
+    });
   } catch (err) {
     res.status(502).json({ error: `Could not load game list: ${err.message}` });
   }
 });
+
 
 // Reseller / Admin Generate Keys
 app.post('/api/keys/generate', authenticateToken, async (req, res) => {

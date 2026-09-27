@@ -190,87 +190,128 @@
         <div class="content-header">
           <div>
             <h1>CDKey Generator</h1>
-            <p>Find a game, click it, then generate CDKeys. Cost will be deducted from reseller balance.</p>
+            <p>Select a game from the catalog below, specify quantity, and generate CDKeys.</p>
           </div>
         </div>
 
-        <div class="grid-2col">
-          <!-- GENERATOR FORM -->
-          <div class="glass-card">
-            <h3>Key Configuration</h3>
-            <form id="generator-form">
-              <div class="form-group">
-                <label>Product</label>
-                <div class="form-control" style="background: rgba(138, 107, 255, 0.12); color: #c3b4ff; font-weight: 600; cursor: default; border-color: rgba(138, 107, 255, 0.25);">
-                  OneGamers (per-game keys)
+        <div class="generator-layout">
+          <!-- LEFT SIDEBAR: SELECTION & GENERATION -->
+          <div class="generator-sidebar">
+            <!-- SELECTED GAME & KEY CONFIG CARD -->
+            <div class="glass-card">
+              <h3>Key Configuration</h3>
+              <form id="generator-form">
+                <div class="form-group">
+                  <label>Product</label>
+                  <div class="form-control" style="background: rgba(138, 107, 255, 0.12); color: #c3b4ff; font-weight: 600; cursor: default; border-color: rgba(138, 107, 255, 0.25);">
+                    OneGamers (per-game keys)
+                  </div>
+                  <input type="hidden" id="gen-product" value="og">
                 </div>
-                <input type="hidden" id="gen-product" value="og">
-              </div>
 
-              <div class="form-group">
-                <label for="game-search-input">Find Game</label>
-                <div class="search-box">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                  <input type="text" id="game-search-input" class="form-control" placeholder="Search by game name or AppID..." autocomplete="off">
+                <div class="form-group">
+                  <label>Selected Game</label>
+                  <div id="selected-game" class="selected-game empty">
+                    <span class="text-muted">No game selected. Click a game from the catalog.</span>
+                  </div>
+                  <input type="hidden" id="gen-appids">
+                  <input type="hidden" id="gen-game-name">
                 </div>
-                <div id="game-results" class="game-results">
-                  <div class="game-results-empty">Type a game name or AppID to search</div>
-                </div>
-              </div>
 
-              <div class="form-group">
-                <label>Selected Game</label>
-                <div id="selected-game" class="selected-game empty">
-                  <span class="text-muted">No game selected. Click a game above.</span>
+                <div class="form-group">
+                  <label for="gen-quantity">Quantity (Keys to Generate)</label>
+                  <input type="number" id="gen-quantity" class="form-control" value="1" min="1" max="100" required>
                 </div>
-                <input type="hidden" id="gen-appids">
-                <input type="hidden" id="gen-game-name">
-              </div>
 
-              <div class="form-group">
-                <label for="gen-quantity">Quantity (Keys to Generate)</label>
-                <input type="number" id="gen-quantity" class="form-control" value="1" min="1" max="100" required>
-              </div>
-
-              <div class="summary-box">
-                <div class="summary-row">
-                  <span>Quantity:</span>
-                  <strong id="calc-qty">1</strong>
+                <div class="summary-box">
+                  <div class="summary-row">
+                    <span>Quantity:</span>
+                    <strong id="calc-qty">1</strong>
+                  </div>
+                  <div class="summary-row">
+                    <span>Cost per Key:</span>
+                    <strong>1.00 credit</strong>
+                  </div>
+                  <div class="summary-row total">
+                    <span>Total Deducted Credits:</span>
+                    <strong id="calc-total" class="text-accent">1.00 credits</strong>
+                  </div>
                 </div>
-                <div class="summary-row">
-                  <span>Cost per Key:</span>
-                  <strong>1.00 credit</strong>
-                </div>
-                <div class="summary-row total">
-                  <span>Total Deducted Credits:</span>
-                  <strong id="calc-total" class="text-accent">1.00 credits</strong>
-                </div>
-              </div>
 
-              <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-generate-submit">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                <span>Generate CDKey(s) Now</span>
-              </button>
-            </form>
-          </div>
-
-          <!-- GENERATED KEYS RESULTS -->
-          <div class="glass-card flex-column">
-            <div class="flex-between align-center mb-3">
-              <h3>Generated Results</h3>
-              <div class="btn-group">
-                <button id="btn-copy-raw" class="btn btn-sm btn-secondary" disabled>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy Keys</span>
+                <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-generate-submit">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                  <span>Generate CDKey(s) Now</span>
                 </button>
-                <button id="btn-copy-protocol" class="btn btn-sm btn-outline" disabled>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-                  <span>Copy Direct Links</span>
-                </button>
-              </div>
+              </form>
             </div>
 
-            <textarea id="gen-output-textarea" class="code-output flex-1" placeholder="Generated keys will appear here..." readonly></textarea>
+            <!-- GENERATED KEYS RESULTS -->
+            <div class="glass-card flex-column">
+              <div class="flex-between align-center mb-3">
+                <h3>Generated Results</h3>
+                <div class="btn-group">
+                  <button id="btn-copy-raw" class="btn btn-sm btn-secondary" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <span>Copy Keys</span>
+                  </button>
+                  <button id="btn-copy-protocol" class="btn btn-sm btn-outline" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                    <span>Copy Direct Links</span>
+                  </button>
+                </div>
+              </div>
+
+              <textarea id="gen-output-textarea" class="code-output flex-1" placeholder="Generated keys will appear here..." readonly></textarea>
+            </div>
+          </div>
+
+          <!-- RIGHT COLUMN: MAIN GAME CATALOG (Replicated from dashboard.html) -->
+          <div class="generator-main">
+            <div class="glass-card">
+              <div class="flex-between align-center mb-3">
+                <h3 style="font-size: 1.1rem; font-weight: 700;">Game Catalog</h3>
+                <span id="game-count-badge" class="text-muted" style="font-size: 0.8125rem;">Loading catalog...</span>
+              </div>
+
+              <!-- SEARCH BOX -->
+              <div class="search-box mb-3">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="game-search-input" class="form-control" placeholder="Search by game name or AppID..." autocomplete="off">
+              </div>
+
+              <!-- FILTERS -->
+              <div class="filters-row mb-3">
+                <select id="game-fgenre" class="form-control sel-sm"><option value="">All genres</option></select>
+                <select id="game-fsize" class="form-control sel-sm">
+                  <option value="">Any size</option>
+                  <option value="lt5">Under 5 GB</option>
+                  <option value="5to20">5 – 20 GB</option>
+                  <option value="20to50">20 – 50 GB</option>
+                  <option value="gt50">Over 50 GB</option>
+                </select>
+                <label class="ptoggle" title="Hide 18+ adult titles">
+                  <input type="checkbox" id="game-adultchk"> 🔒 Hide 18+
+                </label>
+              </div>
+
+              <div class="tagfilters mb-3">
+                <span class="tagbtn" id="tag-online" data-tag="online" title="Games with online-fix support">🌐 Online</span>
+                <span class="tagbtn" id="tag-bypass" data-tag="bypass" title="Games with bypass support">🛡️ Bypass</span>
+                <span class="tagbtn" id="tag-hyper" data-tag="hypervisor" title="Games with hypervisor bypass">🖥️ Hypervisor</span>
+              </div>
+
+              <!-- GAME GRID CONTAINER -->
+              <div id="game-results" class="catalog-grid">
+                <div class="game-results-empty">Loading games catalog...</div>
+              </div>
+
+              <!-- PAGINATION -->
+              <div id="game-pager" class="game-pager hidden mt-3">
+                <button type="button" id="btn-game-prev" class="btn btn-sm btn-secondary" disabled>&lsaquo; Prev</button>
+                <span id="game-page-info" class="text-muted" style="font-size: 0.8125rem;">Page 1</span>
+                <button type="button" id="btn-game-next" class="btn btn-sm btn-secondary" disabled>Next &rsaquo;</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

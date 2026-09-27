@@ -4,8 +4,28 @@ let state = {
   user: null,
   activeTab: 'overview',
   generatedKeys: [],
-  product: 'og'   // 'og' (OneGamers per-game keys)
+  product: 'og',   // 'og' (OneGamers per-game keys)
+  catalogCache: null,
+  catalogGenres: [],
+  catalogFetchedAt: 0,
 };
+
+const CATALOG_CACHE_KEY = 'ost_catalog_cache_v2';
+const CATALOG_TTL_MS = 30 * 60 * 1000; // 30 minutes client-side cache TTL
+
+function initCatalogCache() {
+  try {
+    const raw = localStorage.getItem(CATALOG_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.games) && parsed.games.length > 0) {
+        state.catalogCache = parsed.games;
+        state.catalogGenres = parsed.genres || [];
+        state.catalogFetchedAt = parsed.fetchedAt || 0;
+      }
+    }
+  } catch (_) { }
+}
 
 // API Helper
 async function apiCall(endpoint, method = 'GET', body = null) {
@@ -52,6 +72,7 @@ const loginForm = document.getElementById('login-form');
 
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
+  initCatalogCache();
   initEventListeners();
   checkAuth();
 });
@@ -163,10 +184,43 @@ function initEventListeners() {
 
   qtyInput.addEventListener('input', updateCalc);
 
-  // Game search
-  document.getElementById('game-search-input').addEventListener('input', debounce(searchGames, 300));
-  document.getElementById('game-search-input').addEventListener('keydown', (e) => {
+  // Game search, filters & pagination
+  document.getElementById('game-search-input')?.addEventListener('input', debounce(() => searchGames(1), 300));
+  document.getElementById('game-search-input')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') e.preventDefault(); // don't submit the generator form
+  });
+
+  document.getElementById('game-fgenre')?.addEventListener('change', (e) => {
+    gameCurGenre = e.target.value;
+    searchGames(1);
+  });
+
+  document.getElementById('game-fsize')?.addEventListener('change', (e) => {
+    gameCurSize = e.target.value;
+    searchGames(1);
+  });
+
+  document.getElementById('game-adultchk')?.addEventListener('change', (e) => {
+    gameShowAdult = !e.target.checked; // checked means "Hide 18+"
+    searchGames(1);
+  });
+
+  document.querySelectorAll('.tagfilters .tagbtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tag = btn.getAttribute('data-tag');
+      if (tag && gameCurTags.hasOwnProperty(tag)) {
+        gameCurTags[tag] = !gameCurTags[tag];
+        btn.classList.toggle('active', gameCurTags[tag]);
+        searchGames(1);
+      }
+    });
+  });
+
+  document.getElementById('btn-game-prev')?.addEventListener('click', () => {
+    if (gameCurPage > 1) searchGames(gameCurPage - 1);
+  });
+  document.getElementById('btn-game-next')?.addEventListener('click', () => {
+    if (gameCurPage < gameTotalPages) searchGames(gameCurPage + 1);
   });
 
   document.getElementById('generator-form').addEventListener('submit', async (e) => {
@@ -554,71 +608,271 @@ async function loadActivationsData() {
   }
 }
 
-// Key Generator: Game Search & Selection
-const COVER_URLS = [
-  id => `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`,
-  id => `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/header.jpg`,
-  id => `https://cdn.akamai.steamstatic.com/steam/apps/${id}/header.jpg`,
-  id => `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_616x353.jpg`,
-  id => `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`,
-  id => `/api/sgdb/header/${id}`
-];
-
-function coverImg(appid, cls) {
-  return `<img class="${cls}" src="${COVER_URLS[0](appid)}" data-appid="${escapeHtml(appid)}" data-try="0" alt="" loading="lazy" onerror="nextCover(this)">`;
+// Key Generator: Game Cover Resolution (mirrors dashboard.html)
+function coverCandidates(appid) {
+  return [
+    'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/header.jpg',
+    'https://cdn.cloudflare.steamstatic.com/steam/apps/' + appid + '/header.jpg',
+    'https://cdn.akamai.steamstatic.com/steam/apps/' + appid + '/header.jpg',
+    'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/capsule_616x353.jpg',
+    '/api/sgdb/header/' + appid,
+  ];
 }
 
-// Try the next Steam image URL; show a placeholder when none exist
-function nextCover(img) {
-  const next = parseInt(img.dataset.try, 10) + 1;
-  if (next < COVER_URLS.length) {
-    img.dataset.try = next;
-    img.src = COVER_URLS[next](img.dataset.appid);
-  } else {
-    img.onerror = null;
-    img.classList.add('cover-missing');
-    img.removeAttribute('src');
+function setCover(img, appid, nameEl) {
+  img._sources = coverCandidates(appid);
+  img._i = 0;
+  img.style.opacity = '0';
+  img.onload = () => {
+    img.style.display = 'block';
+    img.style.opacity = '1';
+    if (nameEl) nameEl.classList.remove('noart');
+  };
+  img.onerror = () => {
+    img._i++;
+    if (img._i < img._sources.length) {
+      img.src = img._sources[img._i];
+    } else {
+      img.style.display = 'none';
+      if (nameEl) nameEl.classList.add('noart');
+    }
+  };
+  img.src = img._sources[0];
+}
+
+function addCoverCandidates(img, nameEl, urls) {
+  urls = (urls || []).filter(Boolean);
+  if (!img || !urls.length) return;
+  const start = img._sources ? img._sources.length : 0;
+  img._sources = (img._sources || []).concat(urls);
+  if (nameEl && nameEl.classList.contains('noart')) {
+    img._i = start;
+    nameEl.classList.remove('noart');
+    img.src = img._sources[img._i];
   }
+}
+
+async function loadGameInfo(el, appid) {
+  try {
+    const info = await apiCall('/api/gameinfo/' + appid);
+    const img = el.querySelector('.art img, img.selected-cover'), art = el.querySelector('.art, .selected-cover-wrap');
+    if (img && art) {
+      addCoverCandidates(img, art, [info.cover, info.capsule].concat(info.screenshots || []));
+    }
+    if (info.adult && el.dataset.adult !== '1') {
+      el.dataset.adult = '1';
+      const meta = el.querySelector('.meta');
+      if (meta && !meta.querySelector('.chip.adult')) {
+        const a = document.createElement('span'); a.className = 'chip adult'; a.textContent = '18+'; meta.appendChild(a);
+      }
+    }
+  } catch (_) { }
 }
 
 let gameSearchSeq = 0;
-async function searchGames() {
-  const input = document.getElementById('game-search-input');
-  const box = document.getElementById('game-results');
-  const q = input.value.trim();
-  const seq = ++gameSearchSeq;
+let gameCurPage = 1;
+let gameTotalPages = 1;
+let gameCurQuery = '';
+let gameCurGenre = '';
+let gameCurSize = '';
+let gameCurTags = { online: false, bypass: false, hypervisor: false };
+let gameShowAdult = true; // By default show all unless hidden
 
-  box.innerHTML = `<div class="game-results-empty">Searching...</div>`;
+async function ensureCatalogLoaded(force = false) {
+  const isFresh = state.catalogCache && (Date.now() - state.catalogFetchedAt < CATALOG_TTL_MS);
+  if (isFresh && !force) {
+    return { games: state.catalogCache, genres: state.catalogGenres };
+  }
 
   try {
-    const data = await apiCall(`/api/games?search=${encodeURIComponent(q)}`);
-    if (seq !== gameSearchSeq) return; // a newer search is running
+    const data = await apiCall('/api/games?limit=5000');
+    if (data && Array.isArray(data.games)) {
+      state.catalogCache = data.games;
+      state.catalogGenres = data.genres || [];
+      state.catalogFetchedAt = Date.now();
+      try {
+        localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({
+          games: data.games,
+          genres: data.genres,
+          fetchedAt: state.catalogFetchedAt
+        }));
+      } catch (_) { }
+    }
+  } catch (err) {
+    if (!state.catalogCache) throw err;
+  }
+  return { games: state.catalogCache || [], genres: state.catalogGenres || [] };
+}
+
+function populateGenresDropdown(genres) {
+  const sel = document.getElementById('game-fgenre');
+  if (!sel) return;
+  const cur = gameCurGenre;
+  sel.innerHTML = '<option value="">All genres</option>' +
+    genres.map(g => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('');
+  sel.value = cur;
+}
+
+async function searchGames(page = 1) {
+  gameCurPage = page || 1;
+  const input = document.getElementById('game-search-input');
+  const box = document.getElementById('game-results');
+  const pager = document.getElementById('game-pager');
+  const prevBtn = document.getElementById('btn-game-prev');
+  const nextBtn = document.getElementById('btn-game-next');
+  const pageInfo = document.getElementById('game-page-info');
+  const countBadge = document.getElementById('game-count-badge');
+
+  gameCurQuery = input ? input.value.trim().toLowerCase() : '';
+  const seq = ++gameSearchSeq;
+
+  // 1. Ensure catalog is loaded (from cache or API)
+  if (!state.catalogCache) {
+    box.innerHTML = `<div class="game-results-empty"><span class="spin"></span> Loading games catalog...</div>`;
+    try {
+      await ensureCatalogLoaded();
+    } catch (err) {
+      if (seq === gameSearchSeq) {
+        box.innerHTML = `<div class="game-results-empty">Could not load game list. Try refreshing.</div>`;
+      }
+      return;
+    }
+  } else {
+    // If cache exists but is older than 20 mins, refresh in background without blocking UI
+    if (Date.now() - state.catalogFetchedAt > CATALOG_TTL_MS) {
+      ensureCatalogLoaded(true).then(() => {
+        if (seq === gameSearchSeq) renderCatalogGrid();
+      }).catch(() => {});
+    }
+  }
+
+  if (seq !== gameSearchSeq) return;
+
+  function renderCatalogGrid() {
     state.gamesLoaded = true;
 
-    if (!data.games.length) {
-      box.innerHTML = `<div class="game-results-empty">No games found for "${escapeHtml(q)}"</div>`;
+    if (state.catalogGenres && state.catalogGenres.length) {
+      populateGenresDropdown(state.catalogGenres);
+    }
+
+    let games = state.catalogCache || [];
+
+    // Filter in-memory (0ms latency)
+    if (!gameShowAdult) {
+      games = games.filter(g => !g.adult);
+    }
+
+    if (gameCurQuery) {
+      const isNum = /^\d+$/.test(gameCurQuery);
+      games = games.filter(g => isNum ? String(g.appid).includes(gameCurQuery) : String(g.name).toLowerCase().includes(gameCurQuery));
+    }
+
+    if (gameCurGenre) {
+      games = games.filter(g => String(g.genre) === String(gameCurGenre));
+    }
+
+    if (gameCurSize) {
+      games = games.filter(g => {
+        const bucket = g.sizeBucket || (g.sizeGB < 5 ? 'lt5' : g.sizeGB < 20 ? '5to20' : g.sizeGB < 50 ? '20to50' : 'gt50');
+        return bucket === gameCurSize;
+      });
+    }
+
+    if (gameCurTags.online) games = games.filter(g => g.online_supported);
+    if (gameCurTags.bypass) games = games.filter(g => g.bypass_supported);
+    if (gameCurTags.hypervisor) games = games.filter(g => g.hypervisor_bypass);
+
+    const limit = 24;
+    const total = games.length;
+    gameTotalPages = Math.max(1, Math.ceil(total / limit));
+    gameCurPage = Math.min(Math.max(gameCurPage, 1), gameTotalPages);
+
+    if (pager) {
+      if (total > limit) {
+        pager.classList.remove('hidden');
+        if (pageInfo) pageInfo.textContent = `Page ${gameCurPage} of ${gameTotalPages}`;
+        if (prevBtn) prevBtn.disabled = gameCurPage <= 1;
+        if (nextBtn) nextBtn.disabled = gameCurPage >= gameTotalPages;
+      } else {
+        pager.classList.add('hidden');
+      }
+    }
+
+    if (countBadge) {
+      if (total === 0) {
+        countBadge.textContent = '0 games found';
+      } else {
+        const start = (gameCurPage - 1) * limit + 1;
+        const end = Math.min(gameCurPage * limit, total);
+        countBadge.textContent = `Showing ${start}-${end} of ${total.toLocaleString()} games`;
+      }
+    }
+
+    if (!total) {
+      box.innerHTML = `<div class="game-results-empty">No games found ${gameCurQuery ? `for "${escapeHtml(gameCurQuery)}"` : ''}</div>`;
       return;
     }
 
-    const selected = document.getElementById('gen-appids').value;
-    box.innerHTML = data.games.map(g => `
-      <button type="button" class="game-item${g.appid === selected ? ' selected' : ''}" data-appid="${escapeHtml(g.appid)}" data-name="${escapeHtml(g.name)}">
-        ${coverImg(g.appid, 'game-cover')}
-        <span class="game-info">
-          <span class="game-name">${escapeHtml(g.name)}</span>
-          <span class="game-appid">AppID ${escapeHtml(g.appid)}</span>
-        </span>
-      </button>
-    `).join('');
+    const startIdx = (gameCurPage - 1) * limit;
+    const pageSlice = games.slice(startIdx, startIdx + limit);
+    const selectedAppid = document.getElementById('gen-appids').value;
+    box.innerHTML = '';
 
-    box.querySelectorAll('.game-item').forEach(btn => {
-      btn.addEventListener('click', () => selectGame(btn.dataset.appid, btn.dataset.name));
+    pageSlice.forEach(g => {
+      const isSelected = String(g.appid) === String(selectedAppid);
+      const card = document.createElement('div');
+      card.className = `game${isSelected ? ' selected' : ''}`;
+      card.dataset.appid = g.appid;
+      if (g.adult) card.dataset.adult = '1';
+
+      const art = document.createElement('div');
+      art.className = 'art';
+      art.setAttribute('data-name', g.name);
+
+      const img = document.createElement('img');
+      img.alt = '';
+      img.loading = 'lazy';
+      art.appendChild(img);
+      card.appendChild(art);
+
+      setCover(img, g.appid, art);
+
+      const body = document.createElement('div');
+      body.className = 'body';
+
+      const metaHtml = `
+        <div class="meta">
+          ${g.genreName ? `<span class="chip">${escapeHtml(g.genreName)}</span>` : ''}
+          ${g.size_gb ? `<span class="chip">${escapeHtml(g.size_gb)}</span>` : ''}
+          ${g.online_supported ? `<span class="chip tag online" title="Online-fix supported">Online</span>` : ''}
+          ${g.bypass_supported ? `<span class="chip tag bypass" title="Bypass supported">Bypass</span>` : ''}
+          ${g.hypervisor_bypass ? `<span class="chip tag hyper" title="Hypervisor bypass">Hypervisor</span>` : ''}
+          ${g.adult ? `<span class="chip adult">18+</span>` : ''}
+        </div>
+      `;
+
+      body.innerHTML = `
+        <div class="nm">${escapeHtml(g.name)}</div>
+        <div class="ap">AppID ${escapeHtml(g.appid)}</div>
+        ${metaHtml}
+        <button type="button" class="btn ${isSelected ? 'btn-primary' : 'btn-secondary'} btn-select">
+          ${isSelected ? '✓ Selected' : 'Select Game'}
+        </button>
+      `;
+
+      card.appendChild(body);
+
+      card.addEventListener('click', () => {
+        selectGame(g.appid, g.name);
+      });
+
+      box.appendChild(card);
+
+      loadGameInfo(card, g.appid);
     });
-  } catch (err) {
-    if (seq === gameSearchSeq) {
-      box.innerHTML = `<div class="game-results-empty">Could not load the game list. Try again.</div>`;
-    }
   }
+
+  renderCatalogGrid();
 }
 
 function selectGame(appid, name) {
@@ -627,19 +881,60 @@ function selectGame(appid, name) {
 
   const el = document.getElementById('selected-game');
   el.classList.remove('empty');
-  el.innerHTML = `
-    ${coverImg(appid, 'selected-cover')}
-    <div class="game-info">
-      <span class="game-name">${escapeHtml(name)}</span>
-      <span class="game-appid">AppID ${escapeHtml(appid)}</span>
-    </div>
-    <button type="button" class="btn btn-sm btn-ghost" id="btn-clear-game" title="Clear selection">&times;</button>
-  `;
-  document.getElementById('btn-clear-game').addEventListener('click', clearSelectedGame);
+  el.innerHTML = '';
 
-  document.querySelectorAll('#game-results .game-item').forEach(b => {
-    b.classList.toggle('selected', b.dataset.appid === appid);
+  const art = document.createElement('div');
+  art.className = 'selected-cover-wrap';
+  art.style.width = '120px';
+  art.style.aspectRatio = '460/215';
+  art.style.borderRadius = '8px';
+  art.style.overflow = 'hidden';
+  art.style.flexShrink = '0';
+  art.setAttribute('data-name', name);
+
+  const img = document.createElement('img');
+  img.className = 'selected-cover';
+  img.alt = '';
+  img.style.width = '100%';
+  img.style.height = '100%';
+  img.style.objectFit = 'cover';
+  art.appendChild(img);
+
+  setCover(img, appid, art);
+
+  const info = document.createElement('div');
+  info.className = 'game-info';
+  info.innerHTML = `
+    <span class="game-name" style="font-weight: 700; font-size: 0.95rem;">${escapeHtml(name)}</span>
+    <span class="game-appid" style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);">AppID ${escapeHtml(appid)}</span>
+  `;
+
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn-sm btn-ghost';
+  clearBtn.id = 'btn-clear-game';
+  clearBtn.title = 'Clear selection';
+  clearBtn.innerHTML = '&times;';
+  clearBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    clearSelectedGame();
   });
+
+  el.appendChild(art);
+  el.appendChild(info);
+  el.appendChild(clearBtn);
+
+  document.querySelectorAll('#game-results .game').forEach(card => {
+    const isThis = String(card.dataset.appid) === String(appid);
+    card.classList.toggle('selected', isThis);
+    const btn = card.querySelector('.btn-select');
+    if (btn) {
+      btn.className = `btn ${isThis ? 'btn-primary' : 'btn-secondary'} btn-select`;
+      btn.textContent = isThis ? '✓ Selected' : 'Select Game';
+    }
+  });
+
+  loadGameInfo(el, appid);
 }
 
 function clearSelectedGame() {
@@ -647,8 +942,15 @@ function clearSelectedGame() {
   document.getElementById('gen-game-name').value = '';
   const el = document.getElementById('selected-game');
   el.classList.add('empty');
-  el.innerHTML = `<span class="text-muted">No game selected. Click a game above.</span>`;
-  document.querySelectorAll('#game-results .game-item.selected').forEach(b => b.classList.remove('selected'));
+  el.innerHTML = `<span class="text-muted">No game selected. Click a game from the catalog.</span>`;
+  document.querySelectorAll('#game-results .game.selected').forEach(card => {
+    card.classList.remove('selected');
+    const btn = card.querySelector('.btn-select');
+    if (btn) {
+      btn.className = 'btn btn-secondary btn-select';
+      btn.textContent = 'Select Game';
+    }
+  });
 }
 
 // Refresh the credit balance shown in the top bar
