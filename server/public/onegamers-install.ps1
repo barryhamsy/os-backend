@@ -1,11 +1,11 @@
 <#  OneGamers Activation — Millennium plugin installer (native UI)  #>
 
-# Served from the os-backend public folder, so:
-#   irm onennabe.duckdns.org/onegamers-install.ps1 | iex
-$ScriptUrl = 'https://onennabe.duckdns.org/onegamers-install.ps1'
+# Served from the os-backend server, run via:
+#   irm onennabe.duckdns.org/gamekey | iex
+$ScriptUrl = 'https://onennabe.duckdns.org/gamekey'
 # The built plugin bundle. Drop the `bun run build` output
-# (com.onegamers.gamekey.star) into the server's public/ folder so it serves here.
-$StarUrl   = 'https://onennabe.duckdns.org/com.onegamers.gamekey.star'
+# (com.onegamers.gamekey.star) into os-backend\onegamers\ or os-backend\server\public\.
+$StarUrl   = 'https://onennabe.duckdns.org/onegamers/com.onegamers.gamekey.star'
 $PluginId  = 'com.onegamers.gamekey'
 $StarName  = 'com.onegamers.gamekey.star'
 
@@ -166,13 +166,25 @@ try {
     Step 'Downloading...' 40
     $star = Join-Path $mPlugins $StarName
     $ProgressPreference = 'SilentlyContinue'
+    $downloaded = $false
+    
+    $PrimaryStarUrl  = 'https://onennabe.duckdns.org/onegamers/com.onegamers.gamekey.star'
+    $FallbackStarUrl = 'https://onennabe.duckdns.org/com.onegamers.gamekey.star'
+    
     try {
-        Invoke-WebRequest -Uri $StarUrl -OutFile $star -UseBasicParsing
-    } catch {
-        throw "Couldn't download the plugin bundle. Make sure $StarName is published on the server."
+        Invoke-WebRequest -Uri $PrimaryStarUrl -OutFile $star -UseBasicParsing
+        if ((Test-Path $star) -and (Get-Item $star).Length -ge 1024) { $downloaded = $true }
+    } catch {}
+
+    if (-not $downloaded) {
+        try {
+            Invoke-WebRequest -Uri $FallbackStarUrl -OutFile $star -UseBasicParsing
+            if ((Test-Path $star) -and (Get-Item $star).Length -ge 1024) { $downloaded = $true }
+        } catch {}
     }
-    if (-not (Test-Path $star) -or (Get-Item $star).Length -lt 1024) {
-        throw 'Downloaded plugin bundle looks empty or invalid.'
+
+    if (-not $downloaded -or -not (Test-Path $star) -or (Get-Item $star).Length -lt 1024) {
+        throw "Couldn't download the plugin bundle ($StarName). Make sure it is placed in os-backend\onegamers\ or public\ on the server."
     }
 
     # Enable the plugin in Millennium's config.json (plugins.enabledPlugins).

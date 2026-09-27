@@ -103,6 +103,22 @@ app.get('/', (req, res, next) => {
   return res.redirect('/dashboard');
 });
 
+// Serve OneGamers gamekey installer script via:
+//   irm onennabe.duckdns.org/gamekey | iex
+app.get(['/gamekey', '/gamekey.ps1', '/onegamers-install.ps1'], (req, res) => {
+  const scriptPath = path.join(__dirname, 'public', 'onegamers-install.ps1');
+  if (fs.existsSync(scriptPath)) {
+    res.type('text/plain');
+    return res.send(fs.readFileSync(scriptPath, 'utf8'));
+  }
+  res.status(404).send('Installer script not found');
+});
+
+// Serve /onegamers static folder (for com.onegamers.gamekey.star & assets)
+const onegamersDir = path.join(__dirname, 'onegamers');
+if (!fs.existsSync(onegamersDir)) fs.mkdirSync(onegamersDir, { recursive: true });
+app.use('/onegamers', express.static(onegamersDir));
+app.use('/onegamers', express.static(path.join(__dirname, 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Helper: Generate Alphanumeric CDKey format OST-XXXX-YYYY-ZZZZ
