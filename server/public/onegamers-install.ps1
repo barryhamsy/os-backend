@@ -147,44 +147,70 @@ try {
         if (-not (Test-Path (Join-Path $steam 'steam.exe'))) { throw 'Steam folder not found.' }
     }
 
-    # Millennium must be installed (its plugins folder is the install target).
+    # Ensure Millennium plugins directory exists
     $mPlugins = Join-Path $steam 'millennium\plugins'
     $mConfig  = Join-Path $steam 'millennium\config\config.json'
     if (-not (Test-Path $mPlugins)) {
-        throw 'Millennium is not installed on this Steam. Install Millennium first, then re-run this installer.'
+        New-Item -ItemType Directory -Path $mPlugins -Force | Out-Null
     }
 
     Step 'Preparing...' 15
 
-    # Close Steam so Millennium reloads plugins + config cleanly on next launch.
+    # Close Steam so reloads plugins + config cleanly on launch.
     foreach ($proc in 'steam', 'steamwebhelper') {
         Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 3
 
-    # Download the built plugin bundle (.star)
-    Step 'Downloading...' 40
-    $star = Join-Path $mPlugins $StarName
+    # Fetch and download all files inside os-backend\server\onegamers\ from the server
+    Step 'Downloading files...' 40
     $ProgressPreference = 'SilentlyContinue'
-    $downloaded = $false
-    
-    $PrimaryStarUrl  = 'https://onennabe.duckdns.org/onegamers/com.onegamers.gamekey.star'
-    $FallbackStarUrl = 'https://onennabe.duckdns.org/com.onegamers.gamekey.star'
-    
+    $downloadedCount = 0
+
+    $filesList = @()
     try {
-        Invoke-WebRequest -Uri $PrimaryStarUrl -OutFile $star -UseBasicParsing
-        if ((Test-Path $star) -and (Get-Item $star).Length -ge 1024) { $downloaded = $true }
+        $res = Invoke-RestMethod -Uri 'https://onennabe.duckdns.org/api/onegamers/files' -UseBasicParsing
+        if ($res -and $res.files) { $filesList = $res.files }
     } catch {}
 
-    if (-not $downloaded) {
-        try {
-            Invoke-WebRequest -Uri $FallbackStarUrl -OutFile $star -UseBasicParsing
-            if ((Test-Path $star) -and (Get-Item $star).Length -ge 1024) { $downloaded = $true }
-        } catch {}
+    if ($filesList.Count -gt 0) {
+        foreach ($file in $filesList) {
+            $relPath  = ($file.path -replace '/', '\')
+            $destFile = Join-Path $steam $relPath
+            $destDir  = Split-Path $destFile
+            if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+
+            $downloadUrl = "https://onennabe.duckdns.org/onegamers/$($file.path)"
+            try {
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $destFile -UseBasicParsing
+                if (Test-Path $destFile) { $downloadedCount++ }
+            } catch {}
+
+            # If it's the plugin bundle (.star), also ensure a copy in millennium\plugins\
+            if ($file.path -like '*.star' -or $file.path -eq $StarName) {
+                $pluginStarPath = Join-Path $mPlugins $StarName
+                if ($destFile -ne $pluginStarPath) {
+                    try { Copy-Item -Path $destFile -Destination $pluginStarPath -Force } catch {}
+                }
+            }
+        }
     }
 
-    if (-not $downloaded -or -not (Test-Path $star) -or (Get-Item $star).Length -lt 1024) {
-        throw "Couldn't download the plugin bundle ($StarName). Make sure it is placed in os-backend\onegamers\ or public\ on the server."
+    # Fallback: if no files were downloaded via API list, attempt direct download of plugin bundle
+    if ($downloadedCount -eq 0) {
+        Step 'Downloading plugin bundle...' 50
+        $starPath = Join-Path $mPlugins $StarName
+        $downloaded = $false
+
+        foreach ($url in @('https://onennabe.duckdns.org/onegamers/com.onegamers.gamekey.star', 'https://onennabe.duckdns.org/com.onegamers.gamekey.star')) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $starPath -UseBasicParsing
+                if ((Test-Path $starPath) -and (Get-Item $starPath).Length -ge 1024) { $downloaded = $true; break }
+            } catch {}
+        }
+        if (-not $downloaded) {
+            throw "Couldn't download $StarName from the server. Make sure files are placed in os-backend\server\onegamers\ on the server."
+        }
     }
 
     # Enable the plugin in Millennium's config.json (plugins.enabledPlugins).

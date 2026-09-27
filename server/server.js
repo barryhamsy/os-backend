@@ -117,6 +117,37 @@ app.get(['/gamekey', '/gamekey.ps1', '/onegamers-install.ps1'], (req, res) => {
 // Serve /onegamers static folder (for com.onegamers.gamekey.star & assets)
 const onegamersDir = path.join(__dirname, 'onegamers');
 if (!fs.existsSync(onegamersDir)) fs.mkdirSync(onegamersDir, { recursive: true });
+
+// API endpoint listing all files inside os-backend/server/onegamers
+app.get('/api/onegamers/files', (req, res) => {
+  const filesList = [];
+  function scanDir(dir, relPath = '') {
+    if (!fs.existsSync(dir)) return;
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+      if (item.name === '.gitkeep') continue;
+      const rel = relPath ? `${relPath}/${item.name}` : item.name;
+      const full = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        scanDir(full, rel);
+      } else {
+        filesList.push({ path: rel.replace(/\\/g, '/'), size: fs.statSync(full).size });
+      }
+    }
+  }
+  scanDir(onegamersDir);
+
+  // Fallback: if onegamers/ folder is empty on server, include com.onegamers.gamekey.star from public/
+  if (filesList.length === 0) {
+    const pubStar = path.join(__dirname, 'public', 'com.onegamers.gamekey.star');
+    if (fs.existsSync(pubStar)) {
+      filesList.push({ path: 'com.onegamers.gamekey.star', size: fs.statSync(pubStar).size });
+    }
+  }
+
+  res.json({ files: filesList });
+});
+
 app.use('/onegamers', express.static(onegamersDir));
 app.use('/onegamers', express.static(path.join(__dirname, 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
