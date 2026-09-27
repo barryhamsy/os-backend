@@ -1563,6 +1563,10 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     const size = String(req.query.size || '').trim();         // bucket key, '' = any
     const scope = String(req.query.scope || 'all').trim();    // 'all' | 'unlocked'
     const showAdult = String(req.query.adult || '') === '1';  // parental control off?
+    // Tag filters — each '1' requires the game to carry that flag (AND together).
+    const fOnline = String(req.query.online || '') === '1';
+    const fBypass = String(req.query.bypass || '') === '1';
+    const fHyper  = String(req.query.hypervisor || '') === '1';
     const games = await getGameCatalog();
 
     // Parental control: hide 18+ titles unless explicitly allowed.
@@ -1583,6 +1587,9 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     }
     if (genre) matches = matches.filter((g) => g.genre === genre);
     if (size) matches = matches.filter((g) => g.sizeBucket === size);
+    if (fOnline) matches = matches.filter((g) => g.online_supported);
+    if (fBypass) matches = matches.filter((g) => g.bypass_supported);
+    if (fHyper)  matches = matches.filter((g) => g.hypervisor_bypass);
 
     const total = matches.length;
     const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 24, 1), 60);
@@ -1608,6 +1615,9 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
         size_gb: g.size_gb,
         sizeGB: g.sizeGB,
         adult: g.adult,
+        online_supported: g.online_supported,
+        bypass_supported: g.bypass_supported,
+        hypervisor_bypass: g.hypervisor_bypass,
         cover: `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.appid}/header.jpg`,
       })),
     });
