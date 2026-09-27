@@ -1823,6 +1823,13 @@ app.get('/dashboard', (req, res) => {
   res.status(404).send('Dashboard not found');
 });
 
+// Admin / reseller console (login → Generator, Keys, Resellers, Activations).
+app.get('/admin', (req, res) => {
+  const p = path.join(__dirname, 'public', 'index.html');
+  if (fs.existsSync(p)) { res.type('html'); return res.send(fs.readFileSync(p, 'utf8')); }
+  res.status(404).send('Admin console not found');
+});
+
 // OneGamers (OG) per-game CD-key system — own tables + /api/og/* routes,
 // reusing the shared accounts/credits and the member_unlocks entitlement store.
 // Kept in its own module so a server.js revert can't silently drop it.
