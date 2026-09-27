@@ -62,7 +62,7 @@ if ($filesList.Count -gt 0) {
             $wc.DownloadFile($downloadUrl, $destFile)
             if (Test-Path $destFile) { $downloadedCount++ }
         } catch {
-            Write-Host "  Failed to download $relPath: $_" -ForegroundColor Yellow
+            Write-Host "  Failed to download ${relPath} - $_" -ForegroundColor Yellow
         }
     }
 }
