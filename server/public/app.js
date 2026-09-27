@@ -105,7 +105,7 @@ function showDashboard() {
   // Update navbar user profile
   document.getElementById('nav-username').textContent = state.user.username;
   document.getElementById('nav-user-credits').textContent = parseFloat(state.user.credits).toFixed(2);
-  
+
   const roleBadge = document.getElementById('nav-role-badge');
   roleBadge.textContent = state.user.role.toUpperCase();
   roleBadge.className = `badge badge-${state.user.role}`;
@@ -244,7 +244,7 @@ function initEventListeners() {
         data = await apiCall('/api/keys/generate', 'POST', { appids, game_name, quantity });
       }
       state.generatedKeys = data.keys;
-      
+
       // Update credits in UI
       if (data.remaining_credits !== undefined) {
         state.user.credits = data.remaining_credits;
@@ -566,7 +566,7 @@ async function loadResellersData() {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-id');
         const username = btn.getAttribute('data-username');
-        
+
         document.getElementById('topup-reseller-id').value = id;
         document.getElementById('topup-reseller-name').value = username;
         document.getElementById('modal-topup').classList.remove('hidden');
@@ -836,11 +836,9 @@ async function searchGames(page = 1) {
 
       loadGameInfo(card, g.appid);
     });
-  } catch (err) {
-    if (seq === gameSearchSeq) {
-      box.innerHTML = `<div class="game-results-empty">Could not load game list. Try refreshing.</div>`;
-    }
   }
+
+  renderCatalogGrid();
 }
 
 function selectGame(appid, name) {
@@ -945,7 +943,7 @@ function formatDate(dateStr) {
 
 function debounce(func, wait) {
   let timeout;
-  return function(...args) {
+  return function (...args) {
     clearTimeout(timeout);
     timeout = setTimeout(() => func.apply(this, args), wait);
   };

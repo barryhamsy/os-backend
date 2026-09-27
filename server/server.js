@@ -1239,7 +1239,7 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
 
 const GAMES_API_URL = process.env.GAMES_API_URL || 'https://steamunlockonennabe.duckdns.org/api/onennabe';
 const GAMES_CACHE_MS = 10 * 60 * 1000;
-let gamesCache = { data: null, byId: null, fetchedAt: 0, pending: null };
+let gamesCache = { data: null, byId: null, genres: [], fetchedAt: 0, pending: null };
 const _yesFlag = (v) => { const s = String(v == null ? '' : v).trim().toLowerCase(); return s === 'yes' || s === '1' || s === 'true'; };
 
 // Primary-genre mapping (the catalog's numeric primary_genre → display name).
@@ -1320,8 +1320,15 @@ async function getGameCatalog() {
             hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
           };
         });
+
+      const genreSet = new Map();
+      for (const g of data) if (g.genre) genreSet.set(g.genre, g.genreName);
+      const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
       gamesCache.data = data;
       gamesCache.byId = new Map(data.map(g => [g.appid, g]));
+      gamesCache.genres = genres;
       gamesCache.fetchedAt = Date.now();
       return gamesCache.data;
     } catch (err) {
@@ -1351,7 +1358,7 @@ app.get('/api/games', authenticateToken, async (req, res) => {
     const fHyper  = String(req.query.hypervisor || '') === '1';
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || req.query.pageSize, 10) || 24, 1), 100000);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.query.pageSize, 10) || 24, 1), 200);
 
     const games = await getGameCatalog();
 
@@ -1374,14 +1381,9 @@ app.get('/api/games', authenticateToken, async (req, res) => {
     const curPage = Math.min(Math.max(page, 1), pages);
     const slice = matches.slice((curPage - 1) * limit, curPage * limit);
 
-    const genreSet = new Map();
-    for (const g of pool) if (g.genre) genreSet.set(g.genre, g.genreName);
-    const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
     res.json({
       total, page: curPage, pages, limit, catalogTotal: games.length,
-      genres,
+      genres: gamesCache.genres || [],
       games: slice.map((g) => ({
         appid: g.appid,
         name: g.name,
@@ -1772,10 +1774,13 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
 
     // Genre facet: the distinct genres present in the current pool (so "My games"
     // shows only genres you own). Sorted by name.
-    const genreSet = new Map();
-    for (const g of pool) if (g.genre) genreSet.set(g.genre, g.genreName);
-    const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    let genres = gamesCache.genres || [];
+    if (scope === 'unlocked') {
+      const genreSet = new Map();
+      for (const g of pool) if (g.genre) genreSet.set(g.genre, g.genreName);
+      genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
 
     res.json({
       total, page, pages, pageSize, catalogTotal: games.length, scopeTotal: pool.length,
