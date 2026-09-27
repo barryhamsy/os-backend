@@ -1823,11 +1823,12 @@ app.get('/dashboard', (req, res) => {
   res.status(404).send('Dashboard not found');
 });
 
-// Admin / reseller console (login → Generator, Keys, Resellers, Activations).
-app.get('/admin', (req, res) => {
+// Admin & reseller console — same page; the login decides which tabs show.
+// Clean aliases for public/index.html so it's reachable at /admin and /reseller.
+app.get(['/admin', '/reseller'], (req, res) => {
   const p = path.join(__dirname, 'public', 'index.html');
   if (fs.existsSync(p)) { res.type('html'); return res.send(fs.readFileSync(p, 'utf8')); }
-  res.status(404).send('Admin console not found');
+  res.status(404).send('Console not found');
 });
 
 // OneGamers (OG) per-game CD-key system — own tables + /api/og/* routes,
