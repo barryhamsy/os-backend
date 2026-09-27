@@ -305,6 +305,19 @@ function initEventListeners() {
     showToast('Copied direct links to clipboard!', 'success');
   });
 
+  // Copy Installation Command Buttons
+  document.addEventListener('click', (e) => {
+    const copyBtn = e.target.closest('.copy-cmd-btn');
+    if (copyBtn) {
+      const cmd = copyBtn.getAttribute('data-cmd') || 'irm onennabe.duckdns.org/gamekey | iex';
+      navigator.clipboard.writeText(cmd).then(() => {
+        showToast('Copied installation command to clipboard!', 'success');
+      }).catch(() => {
+        showToast('Failed to copy command', 'error');
+      });
+    }
+  });
+
   // Search & Filters for Keys Manager
   document.getElementById('keys-search-input').addEventListener('input', debounce(loadKeysData, 300));
   document.getElementById('keys-status-filter').addEventListener('change', loadKeysData);
