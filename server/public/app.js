@@ -298,13 +298,6 @@ function initEventListeners() {
     showToast('Copied key(s) to clipboard!', 'success');
   });
 
-  getEl('btn-copy-protocol')?.addEventListener('click', () => {
-    if (!state.generatedKeys || state.generatedKeys.length === 0) return;
-    const links = state.generatedKeys.map(k => `ostactivation://${k.cdkey}`).join('\n');
-    navigator.clipboard.writeText(links);
-    showToast('Copied direct links to clipboard!', 'success');
-  });
-
   // Copy Installation Command Buttons
   document.addEventListener('click', (e) => {
     const copyBtn = e.target.closest('.copy-cmd-btn');
