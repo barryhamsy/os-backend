@@ -118,6 +118,96 @@ app.get(['/gamekey', '/gamekey.ps1', '/onegamers-install.ps1'], (req, res) => {
 const onegamersDir = path.join(__dirname, 'onegamers');
 if (!fs.existsSync(onegamersDir)) fs.mkdirSync(onegamersDir, { recursive: true });
 
+// Pure JS Zip builder helper for onegamers directory
+function createZipFromFolder(folderPath) {
+  const files = [];
+  function scan(dir, prefix = '') {
+    if (!fs.existsSync(dir)) return;
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (item.name === '.gitkeep' || item.name === 'onegamers.zip') continue;
+      const rel = prefix ? `${prefix}/${item.name}` : item.name;
+      const full = path.join(dir, item.name);
+      if (item.isDirectory()) scan(full, rel);
+      else files.push({ name: rel.replace(/\\/g, '/'), data: fs.readFileSync(full) });
+    }
+  }
+  scan(folderPath);
+
+  if (files.length === 0) {
+    const pubStar = path.join(__dirname, 'public', 'com.onegamers.gamekey.star');
+    if (fs.existsSync(pubStar)) {
+      files.push({ name: 'millennium/plugins/com.onegamers.gamekey.star', data: fs.readFileSync(pubStar) });
+    }
+  }
+
+  function crc32(buf) {
+    let crc = -1;
+    for (let i = 0; i < buf.length; i++) {
+      let byte = buf[i];
+      for (let j = 0; j < 8; j++) {
+        let mask = -(byte & 1);
+        crc = (crc >>> 1) ^ (0xEDB88320 & mask);
+        byte >>>= 1;
+      }
+    }
+    return (crc ^ -1) >>> 0;
+  }
+
+  const parts = []; const cdEntries = []; let offset = 0;
+  for (const f of files) {
+    const nameBuf = Buffer.from(f.name, 'utf8');
+    const dataBuf = f.data;
+    const crc = crc32(dataBuf);
+    const localHeader = Buffer.alloc(30 + nameBuf.length);
+    localHeader.writeUInt32LE(0x04034b50, 0); localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6); localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(0, 10); localHeader.writeUInt16LE(0, 12);
+    localHeader.writeUInt32LE(crc, 14); localHeader.writeUInt32LE(dataBuf.length, 18);
+    localHeader.writeUInt32LE(dataBuf.length, 22); localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28); nameBuf.copy(localHeader, 30);
+
+    const entryOffset = offset;
+    parts.push(localHeader, dataBuf);
+    offset += localHeader.length + dataBuf.length;
+
+    const cdHeader = Buffer.alloc(46 + nameBuf.length);
+    cdHeader.writeUInt32LE(0x02014b50, 0); cdHeader.writeUInt16LE(20, 4);
+    cdHeader.writeUInt16LE(20, 6); cdHeader.writeUInt16LE(0, 8);
+    cdHeader.writeUInt16LE(0, 10); cdHeader.writeUInt16LE(0, 12);
+    cdHeader.writeUInt16LE(0, 14); cdHeader.writeUInt32LE(crc, 16);
+    cdHeader.writeUInt32LE(dataBuf.length, 20); cdHeader.writeUInt32LE(dataBuf.length, 24);
+    cdHeader.writeUInt16LE(nameBuf.length, 28); cdHeader.writeUInt16LE(0, 30);
+    cdHeader.writeUInt16LE(0, 32); cdHeader.writeUInt16LE(0, 34);
+    cdHeader.writeUInt16LE(0, 36); cdHeader.writeUInt32LE(0, 38);
+    cdHeader.writeUInt32LE(entryOffset, 42); nameBuf.copy(cdHeader, 46);
+    cdEntries.push(cdHeader);
+  }
+
+  const cdOffset = offset; let cdSize = 0;
+  for (const cd of cdEntries) { parts.push(cd); cdSize += cd.length; }
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6); eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10); eocd.writeUInt32LE(cdSize, 12);
+  eocd.writeUInt32LE(cdOffset, 16); eocd.writeUInt16LE(0, 20);
+  parts.push(eocd);
+
+  return Buffer.concat(parts);
+}
+
+// ZIP download endpoint for OneGamers installation payload
+app.get(['/onegamers.zip', '/api/onegamers/download'], (req, res) => {
+  try {
+    const zipBuf = createZipFromFolder(onegamersDir);
+    res.type('application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="onegamers.zip"');
+    res.send(zipBuf);
+  } catch (e) {
+    res.status(500).send('Error building payload ZIP: ' + e.message);
+  }
+});
+
 // API endpoint listing all files inside os-backend/server/onegamers
 app.get('/api/onegamers/files', (req, res) => {
   const filesList = [];
@@ -125,7 +215,7 @@ app.get('/api/onegamers/files', (req, res) => {
     if (!fs.existsSync(dir)) return;
     const items = fs.readdirSync(dir, { withFileTypes: true });
     for (const item of items) {
-      if (item.name === '.gitkeep') continue;
+      if (item.name === '.gitkeep' || item.name === 'onegamers.zip') continue;
       const rel = relPath ? `${relPath}/${item.name}` : item.name;
       const full = path.join(dir, item.name);
       if (item.isDirectory()) {
@@ -137,7 +227,6 @@ app.get('/api/onegamers/files', (req, res) => {
   }
   scanDir(onegamersDir);
 
-  // Fallback: if onegamers/ folder is empty on server, include com.onegamers.gamekey.star from public/
   if (filesList.length === 0) {
     const pubStar = path.join(__dirname, 'public', 'com.onegamers.gamekey.star');
     if (fs.existsSync(pubStar)) {
