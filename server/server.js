@@ -1823,6 +1823,14 @@ app.get('/dashboard', (req, res) => {
   res.status(404).send('Dashboard not found');
 });
 
+// OneGamers (OG) per-game CD-key system — own tables + /api/og/* routes,
+// reusing the shared accounts/credits and the member_unlocks entitlement store.
+// Kept in its own module so a server.js revert can't silently drop it.
+require('./og')(app, {
+  db, authenticateToken, requireAdmin,
+  dbAddUnlock, mirrorUserToGitHub, toSteamId64,
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`====================================================`);

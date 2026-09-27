@@ -3,7 +3,8 @@ let state = {
   token: localStorage.getItem('ost_token') || null,
   user: null,
   activeTab: 'overview',
-  generatedKeys: []
+  generatedKeys: [],
+  product: 'onennabe'   // 'onennabe' (OST keys) | 'og' (OneGamers per-game keys)
 };
 
 // API Helper
@@ -180,7 +181,14 @@ function initEventListeners() {
     }
 
     try {
-      const data = await apiCall('/api/keys/generate', 'POST', { appids, game_name, quantity });
+      let data;
+      if (state.product === 'og') {
+        // OneGamers keys bind to ONE appid (the selected game).
+        const appid = String(appids).split(',')[0].trim();
+        data = await apiCall('/api/og/keys/generate', 'POST', { appid, game_name, quantity });
+      } else {
+        data = await apiCall('/api/keys/generate', 'POST', { appids, game_name, quantity });
+      }
       state.generatedKeys = data.keys;
       
       // Update credits in UI
@@ -221,6 +229,18 @@ function initEventListeners() {
   document.getElementById('keys-search-input').addEventListener('input', debounce(loadKeysData, 300));
   document.getElementById('keys-status-filter').addEventListener('change', loadKeysData);
   document.getElementById('btn-refresh-keys').addEventListener('click', loadKeysData);
+
+  // Product selector (ONENNABE / OneGamers) — kept in sync across the Generator
+  // and Keys tabs; switching in the Keys tab reloads the list.
+  const genProd = document.getElementById('gen-product');
+  const keysProd = document.getElementById('keys-product');
+  function setProduct(p) {
+    state.product = p;
+    if (genProd) genProd.value = p;
+    if (keysProd) keysProd.value = p;
+  }
+  if (genProd) genProd.addEventListener('change', () => setProduct(genProd.value));
+  if (keysProd) keysProd.addEventListener('change', () => { setProduct(keysProd.value); loadKeysData(); });
 
   // Resellers Modals
   document.getElementById('btn-open-create-reseller-modal')?.addEventListener('click', () => {
@@ -340,7 +360,12 @@ async function loadKeysData() {
   const search = document.getElementById('keys-search-input').value;
   const status = document.getElementById('keys-status-filter').value;
 
-  const endpoint = state.user.role === 'admin' ? '/api/admin/keys' : '/api/keys/my-keys';
+  let endpoint;
+  if (state.product === 'og') {
+    endpoint = state.user.role === 'admin' ? '/api/og/admin/keys' : '/api/og/keys/my';
+  } else {
+    endpoint = state.user.role === 'admin' ? '/api/admin/keys' : '/api/keys/my-keys';
+  }
   const queryParams = new URLSearchParams();
   if (search) queryParams.append('search', search);
   if (status) queryParams.append('status', status);
@@ -359,12 +384,12 @@ async function loadKeysData() {
         <td class="cdkey-text">${escapeHtml(k.cdkey)}</td>
         <td>
           ${k.game_name ? `<div class="key-game-name">${escapeHtml(k.game_name)}</div>` : ''}
-          <span class="badge badge-subtle">${escapeHtml(k.appids)}</span>
+          <span class="badge badge-subtle">${escapeHtml(k.appids || k.appid || '')}</span>
         </td>
         <td>
           <span class="badge badge-${escapeHtml(k.status)}">${escapeHtml(k.status.toUpperCase())}</span>
         </td>
-        <td>${escapeHtml(k.creator_name || state.user.username)}</td>
+        <td>${escapeHtml(k.creator_name || k.reseller || state.user.username)}</td>
         <td>${formatDate(k.created_at)}</td>
         <td>${k.activated_by ? `<strong class="text-accent">${escapeHtml(k.activated_by)}</strong>` : '<span class="text-muted">-</span>'}</td>
         <td>${k.activated_at ? formatDate(k.activated_at) : '<span class="text-muted">-</span>'}</td>
@@ -392,6 +417,18 @@ async function loadKeysData() {
         const cost = parseFloat(btn.getAttribute('data-cost')) || 0;
         const creator = btn.getAttribute('data-creator');
         const isResellerKey = btn.getAttribute('data-creator-role') === 'reseller';
+
+        // OneGamers keys are disabled (no GitHub file / refund flow).
+        if (state.product === 'og') {
+          if (!confirm(`Disable ${key}?\n\nIt can no longer be activated. If it was already used, the customer keeps the game.`)) return;
+          btn.disabled = true;
+          try {
+            await apiCall(`/api/og/admin/keys/${encodeURIComponent(key)}/disable`, 'POST');
+            showToast(`Disabled ${key}`, 'success');
+            loadKeysData();
+          } catch (err) { btn.disabled = false; }
+          return;
+        }
 
         let msg = `Revoke ${key}?\n\n`;
         msg += status === 'used'
