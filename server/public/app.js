@@ -836,9 +836,11 @@ async function searchGames(page = 1) {
 
       loadGameInfo(card, g.appid);
     });
+  } catch (err) {
+    if (seq === gameSearchSeq) {
+      box.innerHTML = `<div class="game-results-empty">Could not load game list. Try refreshing.</div>`;
+    }
   }
-
-  renderCatalogGrid();
 }
 
 function selectGame(appid, name) {
