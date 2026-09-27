@@ -726,69 +726,37 @@ async function searchGames(page = 1) {
   gameCurQuery = input ? input.value.trim().toLowerCase() : '';
   const seq = ++gameSearchSeq;
 
-  // 1. Ensure catalog is loaded (from cache or API)
-  if (!state.catalogCache) {
-    box.innerHTML = `<div class="game-results-empty"><span class="spin"></span> Loading games catalog...</div>`;
-    try {
-      await ensureCatalogLoaded();
-    } catch (err) {
-      if (seq === gameSearchSeq) {
-        box.innerHTML = `<div class="game-results-empty">Could not load game list. Try refreshing.</div>`;
-      }
-      return;
-    }
-  } else {
-    // If cache exists but is older than 20 mins, refresh in background without blocking UI
-    if (Date.now() - state.catalogFetchedAt > CATALOG_TTL_MS) {
-      ensureCatalogLoaded(true).then(() => {
-        if (seq === gameSearchSeq) renderCatalogGrid();
-      }).catch(() => {});
-    }
-  }
+  box.innerHTML = `<div class="game-results-empty"><span class="spin"></span> Loading games catalog...</div>`;
 
-  if (seq !== gameSearchSeq) return;
+  try {
+    const params = new URLSearchParams({
+      page: String(gameCurPage),
+      limit: '24',
+      adult: gameShowAdult ? '1' : '0'
+    });
 
-  function renderCatalogGrid() {
+    if (gameCurQuery) params.set('search', gameCurQuery);
+    if (gameCurGenre) params.set('genre', gameCurGenre);
+    if (gameCurSize) params.set('size', gameCurSize);
+    if (gameCurTags.online) params.set('online', '1');
+    if (gameCurTags.bypass) params.set('bypass', '1');
+    if (gameCurTags.hypervisor) params.set('hypervisor', '1');
+
+    const data = await apiCall(`/api/games?${params.toString()}`);
+    if (seq !== gameSearchSeq) return;
+
     state.gamesLoaded = true;
-
-    if (state.catalogGenres && state.catalogGenres.length) {
-      populateGenresDropdown(state.catalogGenres);
+    if (data.genres && data.genres.length) {
+      populateGenresDropdown(data.genres);
     }
 
-    let games = state.catalogCache || [];
-
-    // Filter in-memory (0ms latency)
-    if (!gameShowAdult) {
-      games = games.filter(g => !g.adult);
-    }
-
-    if (gameCurQuery) {
-      const isNum = /^\d+$/.test(gameCurQuery);
-      games = games.filter(g => isNum ? String(g.appid).includes(gameCurQuery) : String(g.name).toLowerCase().includes(gameCurQuery));
-    }
-
-    if (gameCurGenre) {
-      games = games.filter(g => String(g.genre) === String(gameCurGenre));
-    }
-
-    if (gameCurSize) {
-      games = games.filter(g => {
-        const bucket = g.sizeBucket || (g.sizeGB < 5 ? 'lt5' : g.sizeGB < 20 ? '5to20' : g.sizeGB < 50 ? '20to50' : 'gt50');
-        return bucket === gameCurSize;
-      });
-    }
-
-    if (gameCurTags.online) games = games.filter(g => g.online_supported);
-    if (gameCurTags.bypass) games = games.filter(g => g.bypass_supported);
-    if (gameCurTags.hypervisor) games = games.filter(g => g.hypervisor_bypass);
-
-    const limit = 24;
-    const total = games.length;
-    gameTotalPages = Math.max(1, Math.ceil(total / limit));
-    gameCurPage = Math.min(Math.max(gameCurPage, 1), gameTotalPages);
+    const games = data.games || [];
+    const total = data.total || 0;
+    gameTotalPages = data.pages || 1;
+    gameCurPage = data.page || 1;
 
     if (pager) {
-      if (total > limit) {
+      if (gameTotalPages > 1) {
         pager.classList.remove('hidden');
         if (pageInfo) pageInfo.textContent = `Page ${gameCurPage} of ${gameTotalPages}`;
         if (prevBtn) prevBtn.disabled = gameCurPage <= 1;
@@ -802,8 +770,8 @@ async function searchGames(page = 1) {
       if (total === 0) {
         countBadge.textContent = '0 games found';
       } else {
-        const start = (gameCurPage - 1) * limit + 1;
-        const end = Math.min(gameCurPage * limit, total);
+        const start = (gameCurPage - 1) * 24 + 1;
+        const end = Math.min(gameCurPage * 24, total);
         countBadge.textContent = `Showing ${start}-${end} of ${total.toLocaleString()} games`;
       }
     }
@@ -813,12 +781,10 @@ async function searchGames(page = 1) {
       return;
     }
 
-    const startIdx = (gameCurPage - 1) * limit;
-    const pageSlice = games.slice(startIdx, startIdx + limit);
     const selectedAppid = document.getElementById('gen-appids').value;
     box.innerHTML = '';
 
-    pageSlice.forEach(g => {
+    games.forEach(g => {
       const isSelected = String(g.appid) === String(selectedAppid);
       const card = document.createElement('div');
       card.className = `game${isSelected ? ' selected' : ''}`;
