@@ -241,6 +241,19 @@
                   <input type="hidden" id="gen-game-name">
                 </div>
 
+                <!-- Custom game (not in the OneGamers catalog) -->
+                <div class="form-group">
+                  <details id="custom-game-box">
+                    <summary style="cursor:pointer;color:#c3b4ff;font-size:0.85rem;user-select:none">＋ Custom game (not in the catalog)</summary>
+                    <div style="display:flex;gap:8px;margin-top:10px">
+                      <input type="text" id="custom-appid" class="form-control" placeholder="AppID" inputmode="numeric" autocomplete="off" style="flex:0 0 38%">
+                      <input type="text" id="custom-name" class="form-control" placeholder="Game name" autocomplete="off" style="flex:1">
+                    </div>
+                    <button type="button" id="btn-use-custom" class="btn btn-secondary btn-block" style="margin-top:8px">Use this custom game</button>
+                    <div class="text-muted" style="font-size:0.75rem;margin-top:6px">Enter a Steam AppID and a name for a game that isn't in the catalog, then generate keys as usual.</div>
+                  </details>
+                </div>
+
                 <div class="form-group">
                   <label for="gen-quantity">Quantity (Keys to Generate)</label>
                   <input type="number" id="gen-quantity" class="form-control" value="1" min="1" max="100" required>

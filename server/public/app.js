@@ -201,6 +201,16 @@ function initEventListeners() {
 
   qtyInput.addEventListener('input', updateCalc);
 
+  // Custom game (not in the catalog): set the selection from a manual AppID + name.
+  document.getElementById('btn-use-custom')?.addEventListener('click', () => {
+    const appid = (document.getElementById('custom-appid').value || '').trim();
+    const name = (document.getElementById('custom-name').value || '').trim();
+    if (!/^\d+$/.test(appid)) { showToast('Enter a numeric AppID', 'error'); return; }
+    if (!name) { showToast('Enter a game name', 'error'); return; }
+    selectGame(appid, name);
+    showToast(`Custom game set: ${name} (${appid})`, 'success');
+  });
+
   // Game search, filters & pagination
   document.getElementById('game-search-input')?.addEventListener('input', debounce(() => searchGames(1), 300));
   document.getElementById('game-search-input')?.addEventListener('keydown', (e) => {
