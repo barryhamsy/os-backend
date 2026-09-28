@@ -1668,9 +1668,33 @@ async function handleKeyActivation(cdkeyInput, steamidInput, reqIp) {
     return { status: 400, data: { success: false, error: 'CDKey is disabled' } };
   }
 
+  // Cross-check: if this account already owns every appid this key grants, do NOT
+  // consume the key — the game is already unlocked for them (via an earlier key
+  // or their membership). The key stays 'active' so it isn't wasted.
+  const keyAppids = String(keyRecord.appids || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  if (keyAppids.length) {
+    const owned = new Set();
+    for (const a of await computeEntitlements(cleanSteamID)) owned.add(String(a));
+    try {
+      for (const a of await readUsersJsonAppids(toSteamId64(cleanSteamID))) owned.add(String(a));
+    } catch (_) { /* membership lookup best-effort */ }
+    if (keyAppids.every((a) => owned.has(String(a)))) {
+      return {
+        status: 409,
+        data: {
+          success: false,
+          already_owned: true,
+          error: 'This account already owns this game — the key was not used.',
+          appids: keyAppids.map(Number),
+        },
+      };
+    }
+  }
+
   await db.run(`
-    UPDATE keys 
-    SET status = 'used', activated_by = ?, activated_at = CURRENT_TIMESTAMP 
+    UPDATE keys
+    SET status = 'used', activated_by = ?, activated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `, [cleanSteamID, keyRecord.id]);
 
