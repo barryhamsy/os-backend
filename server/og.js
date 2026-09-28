@@ -262,6 +262,23 @@ module.exports = function registerOG(app, ctx) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Ownership cross-check: does this SteamID already own every appid in `appids`?
+  // OG grants (and membership grants) land in member_unlocks, so that table is the
+  // source of truth. If ctx.computeEntitlements is wired in, fold it in too.
+  async function alreadyOwnsAll(sid, appids) {
+    const want = appids.map((a) => String(a).trim()).filter(Boolean);
+    if (!want.length) return false;
+    const owned = new Set();
+    try {
+      const rows = await db.all('SELECT appid FROM member_unlocks WHERE steamid = ?', [String(sid)]);
+      for (const r of rows) owned.add(String(r.appid));
+    } catch (_) { /* best-effort */ }
+    if (typeof ctx.computeEntitlements === 'function') {
+      try { for (const a of await ctx.computeEntitlements(sid)) owned.add(String(a)); } catch (_) {}
+    }
+    return want.every((a) => owned.has(a));
+  }
+
   // ── PUBLIC: activate an OG key (called by the OneGamers plugin) ───────────────
   // Supports both GET and POST requests (Millennium plugin issues GET to /api/og/activate).
   // Validates the key, binds it to this SteamID, grants the bound appid via member_unlocks,
@@ -286,6 +303,14 @@ module.exports = function registerOG(app, ctx) {
             return res.json({ success: true, already: true, appid: key.appid, game_name: key.game_name, message: 'Already activated on this account' });
           }
           return res.status(409).json({ success: false, message: 'This key was already used on another account' });
+        }
+
+        // Cross-check: don't burn an active key on a game the account already owns.
+        if (await alreadyOwnsAll(sid, [key.appid])) {
+          return res.status(409).json({
+            success: false, already_owned: true, appid: key.appid, game_name: key.game_name,
+            message: 'This account already owns this game — the key was not used.',
+          });
         }
 
         const upd = await db.run(
@@ -319,13 +344,22 @@ module.exports = function registerOG(app, ctx) {
           return res.status(409).json({ success: false, message: 'This key was already used on another account' });
         }
 
+        const appidsList = String(legacyKey.appids || '').split(',').map(a => a.trim()).filter(Boolean);
+
+        // Cross-check: don't burn an active key on a game the account already owns.
+        if (await alreadyOwnsAll(sid, appidsList)) {
+          return res.status(409).json({
+            success: false, already_owned: true, appid: legacyKey.appids, game_name: legacyKey.game_name || '',
+            message: 'This account already owns this game — the key was not used.',
+          });
+        }
+
         const upd = await db.run(
           "UPDATE keys SET status = 'used', activated_by = ?, activated_at = CURRENT_TIMESTAMP WHERE cdkey = ? AND status = 'active'",
           [sid, cd]
         );
         if (!upd.changes) return res.status(409).json({ success: false, message: 'Key is no longer available' });
 
-        const appidsList = String(legacyKey.appids || '').split(',').map(a => a.trim()).filter(Boolean);
         for (const aid of appidsList) {
           await dbAddUnlock(sid, aid);
         }
