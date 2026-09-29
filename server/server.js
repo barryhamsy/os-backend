@@ -33,50 +33,19 @@ db.run(`CREATE TABLE IF NOT EXISTS member_unlocks (
   PRIMARY KEY (steamid, appid)
 )`).catch((e) => console.error('[member_unlocks] init failed:', e.message));
 
-const STEAM64_BASE = 76561197960265728n;
-function toSteamId64(id) {
-  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
-  catch { return String(id); }
-}
-
-function getSteamIdCandidates(sidInput) {
-  const sidStr = String(sidInput || '').trim();
-  if (!sidStr) return [];
-  const set = new Set([sidStr]);
-  try {
-    const n = BigInt(sidStr);
-    if (n > STEAM64_BASE) {
-      set.add(String(n - STEAM64_BASE));
-    } else if (n > 0n) {
-      set.add(String(n + STEAM64_BASE));
-    }
-  } catch {}
-  return [...set];
-}
-
 async function dbGetUnlocks(sid) {
-  const candidates = getSteamIdCandidates(sid);
-  if (!candidates.length) return [];
-  const placeholders = candidates.map(() => '?').join(',');
-  const rows = await db.all(`SELECT DISTINCT appid FROM member_unlocks WHERE steamid IN (${placeholders})`, candidates);
+  const rows = await db.all('SELECT appid FROM member_unlocks WHERE steamid = ?', [String(sid)]);
   return rows.map((r) => String(r.appid));
 }
 async function dbAddUnlock(sid, appid) {
-  const candidates = getSteamIdCandidates(sid);
-  const now = Date.now();
-  for (const c of candidates) {
-    await db.run('INSERT OR IGNORE INTO member_unlocks (steamid, appid, added_at) VALUES (?,?,?)',
-      [c, String(appid), now]).catch(() => {});
-  }
+  await db.run('INSERT OR IGNORE INTO member_unlocks (steamid, appid, added_at) VALUES (?,?,?)',
+    [String(sid), String(appid), Date.now()]);
 }
 async function dbAddUnlocks(sid, appids) {
   for (const a of appids) await dbAddUnlock(sid, a);
 }
 async function dbRemoveUnlock(sid, appid) {
-  const candidates = getSteamIdCandidates(sid);
-  for (const c of candidates) {
-    await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [c, String(appid)]).catch(() => {});
-  }
+  await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [String(sid), String(appid)]);
 }
 
 // Debounced, best-effort GitHub backup of a user's unlock list. Coalesces a
@@ -758,6 +727,11 @@ async function readUsersJsonAppids(sid64) {
   }
 }
 
+const STEAM64_BASE = 76561197960265728n;
+function toSteamId64(id) {
+  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
+  catch { return String(id); }
+}
 
 app.get('/api/entitlements/:steamid', async (req, res) => {
   try {
@@ -855,11 +829,7 @@ async function suValidate(cd, sid) {
       steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
     }),
   }, 25000); // key binding is a write — allow much longer than a plain read
-  const data = await vr.json().catch(() => null);
-  if (data && data.status === 'success' && sid64 && cd) {
-    db.run('INSERT OR IGNORE INTO activations (cdkey, steamid, appids) VALUES (?, ?, ?)', [cd, sid64, 'membership']).catch(() => {});
-  }
-  return data;
+  return await vr.json().catch(() => null);
 }
 
 // Full key list (server-side only). Used to look up an existing user's own key
@@ -934,11 +904,60 @@ function suKeyCompare(a, b) {
 app.get('/api/su/lookup', async (req, res) => {
   const sidIn = String(req.query.steamid || '').trim();
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
+  const sid64 = toSteamId64(sidIn);
   try {
-    const mem = await suLookup(sidIn);
-    return res.json(mem);
+    const keys = await getKeyList(); // cached; served stale if the upstream is slow
+    const today = suTodayStr();
+
+    // Every key this SteamID has activated.
+    const matches = [];
+    for (const k of keys) {
+      const ids = Array.isArray(k.steamids) ? k.steamids : [];
+      const mine = ids.find((s) => String(s && s.steamid) === sid64);
+      if (!mine) continue;
+      const exp = String(k.expiry_date || '');
+      // YYYY-MM-DD compares correctly as a string. Treat "no expiry" as active.
+      const expired = exp ? (exp < today) : false;
+      matches.push({
+        cd_key: k.cd_key,
+        expiry_date: exp,
+        key_type: k.key_type || '',
+        // The SteamID's own activation date, falling back to the key's.
+        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+        expired,
+      });
+    }
+
+    // Prefer the highest-priority key type, then the furthest-out expiry.
+    const active = matches
+      .filter((m) => !m.expired)
+      .sort(suKeyCompare);
+    if (active.length) {
+      const m = active[0];
+      return res.json({
+        found: true,
+        cd_key: m.cd_key,
+        key_type: m.key_type,
+        activation_date: m.activation_date,
+        expiry_date: m.expiry_date,
+      });
+    }
+    if (matches.length) {
+      // Expired — still return the details so the UI can show what expired.
+      const m = matches.slice().sort(suKeyCompare)[0];
+      return res.json({
+        found: false,
+        expired: true,
+        cd_key: m.cd_key,
+        key_type: m.key_type,
+        activation_date: m.activation_date,
+        expiry_date: m.expiry_date,
+        message: 'Your Steam Unlock membership has expired.',
+      });
+    }
+    return res.json({ found: false, message: 'No Steam Unlock membership found for this Steam account.' });
   } catch (e) {
-    return res.status(500).json({ found: false, error: e.message });
+    return res.status(502).json({ found: false, error: 'Could not reach the key server' });
   }
 });
 
@@ -1067,15 +1086,9 @@ async function suMemberUnlock(params, res) {
   try {
     const sid = toSteamId64(String(params.steamid || '').trim());
     const appId = String(params.appid || '').replace(/\D/g, '');
-    const cd = String(params.cd_key || params.cdkey || params.key || '').trim();
     if (!sid || !appId) return res.status(400).json({ success: false, error: 'steamid and appid are required' });
-    let mem = await suLookup(sid);
-    if (!mem.found && cd) {
-      const vd = await suValidate(cd, sid).catch(() => null);
-      if (vd && vd.status === 'success') {
-        mem = { found: true, cd_key: cd, key_type: 'PREMIUM' };
-      }
-    }
+    const mem = await suLookup(sid);
+    if (!mem.found) return res.status(403).json({ success: false, error: mem.expired ? 'Membership expired' : 'No active membership' });
     const migrated = await ensureMigrated(sid);
     await dbAddUnlock(sid, appId);
     const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
@@ -1693,151 +1706,24 @@ app.get('/auth/steam/return', async (req, res) => {
 app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/dashboard'); });
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
-async function suLookup(sidInput) {
-  const sid64 = toSteamId64(String(sidInput || '').trim());
-  let sid32 = sid64;
-  try {
-    const n = BigInt(sid64);
-    if (n > STEAM64_BASE) sid32 = String(n - STEAM64_BASE);
-  } catch {}
-
-  const candidateSet = new Set([String(sidInput || '').trim(), sid64, sid32]);
+async function suLookup(sid64) {
+  const keys = await getKeyList(); // cached; served stale if the upstream is slow
+  const today = suTodayStr();
   const matches = [];
-
-  // 1. Check local SQLite DB first (instant & reliable for local activations & keys)
-  try {
-    for (const c of candidateSet) {
-      if (!c) continue;
-
-      // Check keys table
-      const kRow = await db.get(
-        "SELECT cdkey, created_at FROM keys WHERE activated_by = ? AND status = 'used' LIMIT 1",
-        [c]
-      ).catch(() => null);
-
-      if (kRow) {
-        matches.push({
-          cd_key: kRow.cdkey,
-          expiry_date: '', // no expiry / lifetime
-          key_type: 'PREMIUM',
-          activation_date: String(kRow.created_at || ''),
-          expired: false,
-        });
-        break;
-      }
-
-      // Check og_keys table
-      const ogRow = await db.get(
-        "SELECT cdkey, created_at FROM og_keys WHERE activated_by = ? AND status = 'used' LIMIT 1",
-        [c]
-      ).catch(() => null);
-
-      if (ogRow) {
-        matches.push({
-          cd_key: ogRow.cdkey,
-          expiry_date: '', // no expiry / lifetime
-          key_type: 'PREMIUM',
-          activation_date: String(ogRow.created_at || ''),
-          expired: false,
-        });
-        break;
-      }
-
-      // Check activations table
-      const actRow = await db.get(
-        "SELECT cdkey, activated_at FROM activations WHERE steamid = ? LIMIT 1",
-        [c]
-      ).catch(() => null);
-
-      if (actRow) {
-        matches.push({
-          cd_key: actRow.cdkey,
-          expiry_date: '', // no expiry / lifetime
-          key_type: 'PREMIUM',
-          activation_date: String(actRow.activated_at || ''),
-          expired: false,
-        });
-        break;
-      }
-
-      // Check og_activations table
-      const ogActRow = await db.get(
-        "SELECT cdkey, activated_at FROM og_activations WHERE steamid = ? LIMIT 1",
-        [c]
-      ).catch(() => null);
-
-      if (ogActRow) {
-        matches.push({
-          cd_key: ogActRow.cdkey,
-          expiry_date: '', // no expiry / lifetime
-          key_type: 'PREMIUM',
-          activation_date: String(ogActRow.activated_at || ''),
-          expired: false,
-        });
-        break;
-      }
-    }
-
-    if (matches.length === 0) {
-      for (const c of candidateSet) {
-        if (!c) continue;
-        const unlockRow = await db.get(
-          "SELECT added_at FROM member_unlocks WHERE steamid = ? LIMIT 1",
-          [c]
-        ).catch(() => null);
-
-        if (unlockRow) {
-          matches.push({
-            cd_key: 'ACTIVATED-MEMBERSHIP',
-            expiry_date: '',
-            key_type: 'PREMIUM',
-            activation_date: unlockRow.added_at ? new Date(unlockRow.added_at).toISOString().slice(0, 10) : '',
-            expired: false,
-          });
-          break;
-        }
-      }
-    }
-  } catch (e) {
-    console.error('[suLookup] local DB check error:', e.message);
+  for (const k of keys) {
+    const ids = Array.isArray(k.steamids) ? k.steamids : [];
+    const mine = ids.find((s) => String(s && s.steamid) === sid64);
+    if (!mine) continue;
+    const exp = String(k.expiry_date || '');
+    matches.push({
+      cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '',
+      activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+      expired: exp ? (exp < today) : false,
+    });
   }
-
-  // 2. Check remote key list (duckdns upstream) with 32-bit / 64-bit SteamID matching
-  try {
-    const keys = await getKeyList(); // cached; served stale if upstream is slow
-    const today = suTodayStr();
-    for (const k of keys) {
-      const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => s && (candidateSet.has(String(s.steamid)) || candidateSet.has(toSteamId64(s.steamid))));
-      if (!mine) continue;
-      const exp = String(k.expiry_date || '');
-      matches.push({
-        cd_key: k.cd_key,
-        expiry_date: exp,
-        key_type: k.key_type || '',
-        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-        expired: exp ? (exp < today) : false,
-      });
-    }
-  } catch (e) {
-    console.error('[suLookup] remote key list error:', e.message);
-  }
-
   const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
   if (active.length) return { found: true, ...active[0] };
-  if (matches.length) {
-    const m = matches.slice().sort(suKeyCompare)[0];
-    return { found: false, expired: true, ...m };
-  }
-  if (sid64) {
-    return {
-      found: true,
-      cd_key: 'ACTIVATED-MEMBERSHIP',
-      key_type: 'PREMIUM',
-      activation_date: suTodayStr(),
-      expired: false,
-    };
-  }
+  if (matches.length) { const m = matches.slice().sort(suKeyCompare)[0]; return { found: false, expired: true, ...m }; }
   return { found: false };
 }
 

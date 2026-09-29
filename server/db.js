@@ -80,6 +80,23 @@ async function initDb() {
     // Index the column computeEntitlements() filters on, so membership lookups
     // stay instant as the keys table grows into the thousands.
     db.run(`CREATE INDEX IF NOT EXISTS idx_keys_activated_by ON keys(activated_by)`);
+    // Fast lookups of a SteamID's activation history.
+    db.run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`);
+
+    // 3. Topup Logs table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS topup_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reseller_id INTEGER NOT NULL,
+        admin_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        note TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (reseller_id) REFERENCES users(id),
+        FOREIGN KEY (admin_id) REFERENCES users(id)
+      )
+    `);
+
     // 4. Activation Logs table
     db.run(`
       CREATE TABLE IF NOT EXISTS activations (
@@ -91,51 +108,6 @@ async function initDb() {
         activated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
-
-    // Fast lookups of a SteamID's activation history.
-    db.run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`);
-
-    // 5. Member Unlocks table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS member_unlocks (
-        steamid TEXT NOT NULL,
-        appid TEXT NOT NULL,
-        added_at INTEGER,
-        PRIMARY KEY (steamid, appid)
-      )
-    `);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_member_unlocks_steamid ON member_unlocks(steamid)`);
-
-    // 6. OneGamers OG Keys table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS og_keys (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cdkey TEXT UNIQUE NOT NULL,
-        appid TEXT NOT NULL,
-        game_name TEXT,
-        created_by INTEGER NOT NULL,
-        cost REAL DEFAULT 1.0,
-        status TEXT DEFAULT 'active' CHECK(status IN ('active','used','disabled')),
-        activated_by TEXT,
-        activated_at DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_og_keys_created_by ON og_keys(created_by)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_og_keys_activated_by ON og_keys(activated_by)`);
-
-    // 7. OneGamers OG Activations table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS og_activations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cdkey TEXT NOT NULL,
-        steamid TEXT NOT NULL,
-        appid TEXT NOT NULL,
-        ip_address TEXT,
-        activated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_og_acts_steamid ON og_activations(steamid)`);
 
     // Seed default admin if no users exist
     const row = await get("SELECT count(*) as count FROM users WHERE role = 'admin'");
