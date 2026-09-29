@@ -1706,24 +1706,89 @@ app.get('/auth/steam/return', async (req, res) => {
 app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/dashboard'); });
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
-async function suLookup(sid64) {
-  const keys = await getKeyList(); // cached; served stale if the upstream is slow
-  const today = suTodayStr();
+async function suLookup(sidInput) {
+  const sid64 = toSteamId64(String(sidInput || '').trim());
+  let sid32 = sid64;
+  try {
+    const n = BigInt(sid64);
+    if (n > STEAM64_BASE) sid32 = String(n - STEAM64_BASE);
+  } catch {}
+
+  const candidateSet = new Set([String(sidInput || '').trim(), sid64, sid32]);
   const matches = [];
-  for (const k of keys) {
-    const ids = Array.isArray(k.steamids) ? k.steamids : [];
-    const mine = ids.find((s) => String(s && s.steamid) === sid64);
-    if (!mine) continue;
-    const exp = String(k.expiry_date || '');
-    matches.push({
-      cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '',
-      activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-      expired: exp ? (exp < today) : false,
-    });
+
+  // 1. Check local SQLite DB first (instant & reliable for local activations & keys)
+  try {
+    for (const c of candidateSet) {
+      if (!c) continue;
+      const localKey = await db.get(
+        "SELECT cdkey, created_at FROM keys WHERE activated_by = ? AND status = 'used' UNION ALL SELECT cdkey, created_at FROM og_keys WHERE activated_by = ? AND status = 'used' LIMIT 1",
+        [c, c]
+      ).catch(() => null);
+
+      if (localKey) {
+        matches.push({
+          cd_key: localKey.cdkey,
+          expiry_date: '', // no expiry / lifetime
+          key_type: 'PREMIUM',
+          activation_date: String(localKey.created_at || ''),
+          expired: false,
+        });
+        break;
+      }
+    }
+
+    if (matches.length === 0) {
+      for (const c of candidateSet) {
+        if (!c) continue;
+        const unlockRow = await db.get(
+          "SELECT added_at FROM member_unlocks WHERE steamid = ? LIMIT 1",
+          [c]
+        ).catch(() => null);
+
+        if (unlockRow) {
+          matches.push({
+            cd_key: 'ACTIVATED-MEMBERSHIP',
+            expiry_date: '',
+            key_type: 'PREMIUM',
+            activation_date: unlockRow.added_at ? new Date(unlockRow.added_at).toISOString().slice(0, 10) : '',
+            expired: false,
+          });
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[suLookup] local DB check error:', e.message);
   }
+
+  // 2. Check remote key list (duckdns upstream) with 32-bit / 64-bit SteamID matching
+  try {
+    const keys = await getKeyList(); // cached; served stale if upstream is slow
+    const today = suTodayStr();
+    for (const k of keys) {
+      const ids = Array.isArray(k.steamids) ? k.steamids : [];
+      const mine = ids.find((s) => s && (candidateSet.has(String(s.steamid)) || candidateSet.has(toSteamId64(s.steamid))));
+      if (!mine) continue;
+      const exp = String(k.expiry_date || '');
+      matches.push({
+        cd_key: k.cd_key,
+        expiry_date: exp,
+        key_type: k.key_type || '',
+        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+        expired: exp ? (exp < today) : false,
+      });
+    }
+  } catch (e) {
+    console.error('[suLookup] remote key list error:', e.message);
+  }
+
   const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
   if (active.length) return { found: true, ...active[0] };
-  if (matches.length) { const m = matches.slice().sort(suKeyCompare)[0]; return { found: false, expired: true, ...m }; }
+  if (matches.length) {
+    const m = matches.slice().sort(suKeyCompare)[0];
+    return { found: false, expired: true, ...m };
+  }
   return { found: false };
 }
 
