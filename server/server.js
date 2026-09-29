@@ -1832,7 +1832,39 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
 //     the same source the desktop uses; falls back to appdetails
 //     recommendations/metacritic when a game has no review score yet.
 // Cached per appid; all upstreams best-effort with timeouts.
+// Cached per appid; all upstreams best-effort with timeouts + disk persistence.
+const GAME_INFO_CACHE_FILE = path.join(__dirname, 'game_info_cache.json');
 const _infoCache = new Map();
+const _infoPending = new Map();
+
+(function loadGameInfoFromDisk() {
+  try {
+    if (fs.existsSync(GAME_INFO_CACHE_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(GAME_INFO_CACHE_FILE, 'utf8'));
+      if (saved && typeof saved === 'object') {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v && (v.cover || (v.genres && v.genres.length) || (v.rating && v.rating.score))) {
+            _infoCache.set(k, v);
+          }
+        }
+        console.log(`[Game Info] Seeded ${_infoCache.size} game info records from disk cache`);
+      }
+    }
+  } catch (e) { console.error('[Game Info] disk load failed:', e.message); }
+})();
+
+let _saveInfoTimeout = null;
+function saveGameInfoToDisk() {
+  if (_saveInfoTimeout) return;
+  _saveInfoTimeout = setTimeout(() => {
+    _saveInfoTimeout = null;
+    try {
+      const obj = Object.fromEntries(_infoCache);
+      fs.writeFileSync(GAME_INFO_CACHE_FILE, JSON.stringify(obj));
+    } catch (_) {}
+  }, 5000);
+}
+
 const REVIEW_LABELS = { 9: 'Overwhelmingly Positive', 8: 'Very Positive', 7: 'Positive',
   6: 'Mostly Positive', 5: 'Mixed', 4: 'Mostly Negative', 3: 'Negative',
   2: 'Very Negative', 1: 'Overwhelmingly Negative' };
@@ -1841,7 +1873,7 @@ async function fetchAppDetails(appid) {
   try {
     const r = await fetchT(
       `https://store.steampowered.com/api/appdetails?appids=${appid}&l=en&cc=my&filters=basic,genres,screenshots,recommendations,metacritic`,
-      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 7000);
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 3000);
     const data = await r.json().catch(() => null);
     // Steam sometimes files the reply under a regional alias appid — match by
     // data.steam_appid, exactly like the desktop's _ss_pick_entry.
@@ -1869,7 +1901,7 @@ async function fetchAppDetails(appid) {
 
 async function fetchReviewScore(appid) {
   try {
-    const r = await fetchT(`https://api.steamcmd.net/v1/info/${appid}`, {}, 6000);
+    const r = await fetchT(`https://api.steamcmd.net/v1/info/${appid}`, {}, 2500);
     const data = await r.json().catch(() => null);
     const common = data && data.data && data.data[appid] && data.data[appid].common;
     if (common) {
@@ -1905,16 +1937,41 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
   const appid = String(req.params.appid || '').replace(/\D/g, '');
   if (!appid) return res.status(400).json({ error: 'appid required' });
   if (_infoCache.has(appid)) return res.json(_infoCache.get(appid));
-  const [det, rv] = await Promise.all([fetchAppDetails(appid), fetchReviewScore(appid)]);
-  const out = {
-    appid,
-    genre: det.genre, genres: det.genres,
-    required_age: det.requiredAge, is_free: det.isFree, adult: det.requiredAge >= 18,
-    cover: det.cover, capsule: det.capsule, screenshots: det.screenshots,
-    rating: computeRating(rv, det),
-  };
-  _infoCache.set(appid, out);
-  res.json(out);
+
+  if (_infoPending.has(appid)) {
+    try {
+      const out = await _infoPending.get(appid);
+      return res.json(out);
+    } catch {
+      return res.json({ appid, genre: '', genres: [], required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], rating: { score: null, label: '', cls: '', count: '' } });
+    }
+  }
+
+  const p = (async () => {
+    const [det, rv] = await Promise.all([fetchAppDetails(appid), fetchReviewScore(appid)]);
+    const out = {
+      appid,
+      genre: det.genre, genres: det.genres,
+      required_age: det.requiredAge, is_free: det.isFree, adult: det.requiredAge >= 18,
+      cover: det.cover, capsule: det.capsule, screenshots: det.screenshots,
+      rating: computeRating(rv, det),
+    };
+    if (det.cover || (det.genres && det.genres.length) || (rv.score != null && rv.score >= 1) || det.recommendations > 0) {
+      _infoCache.set(appid, out);
+      saveGameInfoToDisk();
+    }
+    return out;
+  })();
+
+  _infoPending.set(appid, p);
+  try {
+    const out = await p;
+    res.json(out);
+  } catch (err) {
+    res.json({ appid, genre: '', genres: [], required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], rating: { score: null, label: '', cls: '', count: '' } });
+  } finally {
+    _infoPending.delete(appid);
+  }
 });
 // Back-compat alias for the older reviews endpoint.
 app.get('/api/reviews/:appid', (req, res) => res.redirect(307, `/api/gameinfo/${String(req.params.appid || '').replace(/\D/g, '')}`));
