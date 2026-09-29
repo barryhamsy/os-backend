@@ -52,18 +52,8 @@ async function dbRemoveUnlock(sid, appid) {
 // burst of unlocks into ONE commit so we never hammer GitHub. Never on the hot path.
 const _mirrorTimers = new Map();
 function mirrorUserToGitHub(sid) {
-  sid = String(sid);
-  if (_mirrorTimers.has(sid)) return; // one already scheduled — it'll read latest DB state
-  const t = setTimeout(async () => {
-    _mirrorTimers.delete(sid);
-    try {
-      const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
-      const json = JSON.stringify({ appids }, null, 2);
-      const r = await putFileToGitHub(`users/${sid}.json`, json, `Sync unlocks for ${sid} (${appids.length})`);
-      if (!r.success) console.warn(`[mirror] ${sid} backup failed: ${String(r.reason).slice(0, 120)}`);
-    } catch (e) { console.error(`[mirror] ${sid} exception: ${e.message}`); }
-  }, 5000);
-  _mirrorTimers.set(sid, t);
+  // Disabled: Local SQLite is the sole source of truth
+  return;
 }
 
 // One-time import of an existing GitHub users/<sid>.json into the DB, so we never
@@ -74,12 +64,6 @@ function mirrorUserToGitHub(sid) {
 const _migrated = new Set();
 async function ensureMigrated(sid) {
   sid = String(sid);
-  if (_migrated.has(sid)) return true;
-  const have = await dbGetUnlocks(sid);
-  if (have.length > 0) { _migrated.add(sid); return true; }
-  const gh = await readUsersJsonFromGitHub(sid); // [] = no file, null = read failed
-  if (gh === null) return false;
-  if (gh.length) await dbAddUnlocks(sid, gh);
   _migrated.add(sid);
   return true;
 }
@@ -579,10 +563,9 @@ const PATCH_GITHUB_TOKEN = process.env.PATCH_GITHUB_TOKEN || GITHUB_TOKEN;
 
 // Helper: Commit Key File directly to GitHub repository (main/keys/<CDKEY>.txt)
 async function commitKeyToGitHub(cdkey, appids) {
-  if (!GITHUB_TOKEN) {
-    console.warn(`[GitHub Commit Warning] GITHUB_TOKEN not configured in server environment. Key ${cdkey} saved locally only.`);
-    return { success: false, reason: 'No GITHUB_TOKEN configured' };
-  }
+  // Disabled: Keys stored in SQLite only
+  return { success: true };
+}
 
   const path = `keys/${cdkey}.txt`;
   const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`;
@@ -639,16 +622,9 @@ async function commitKeyToGitHub(cdkey, appids) {
 
 // Helper: Delete Key File from GitHub repository (main/keys/<CDKEY>.txt)
 async function deleteKeyFromGitHub(cdkey) {
-  if (!GITHUB_TOKEN) {
-    return { success: false, reason: 'No GITHUB_TOKEN configured' };
-  }
-
-  const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/keys/${cdkey}.txt`;
-  const headers = {
-    'Authorization': `Bearer ${GITHUB_TOKEN}`,
-    'User-Agent': 'OST-Server/1.0',
-    'Accept': 'application/vnd.github+json'
-  };
+  // Disabled: Key revocation handled in SQLite
+  return { success: true };
+}
 
   try {
     const checkRes = await fetch(`${url}?ref=main`, { headers });
