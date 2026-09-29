@@ -1721,17 +1721,36 @@ async function suLookup(sidInput) {
   try {
     for (const c of candidateSet) {
       if (!c) continue;
-      const localKey = await db.get(
-        "SELECT cdkey, created_at FROM keys WHERE activated_by = ? AND status = 'used' UNION ALL SELECT cdkey, created_at FROM og_keys WHERE activated_by = ? AND status = 'used' LIMIT 1",
-        [c, c]
+
+      // Check keys table
+      const kRow = await db.get(
+        "SELECT cdkey, created_at FROM keys WHERE activated_by = ? AND status = 'used' LIMIT 1",
+        [c]
       ).catch(() => null);
 
-      if (localKey) {
+      if (kRow) {
         matches.push({
-          cd_key: localKey.cdkey,
+          cd_key: kRow.cdkey,
           expiry_date: '', // no expiry / lifetime
           key_type: 'PREMIUM',
-          activation_date: String(localKey.created_at || ''),
+          activation_date: String(kRow.created_at || ''),
+          expired: false,
+        });
+        break;
+      }
+
+      // Check og_keys table
+      const ogRow = await db.get(
+        "SELECT cdkey, created_at FROM og_keys WHERE activated_by = ? AND status = 'used' LIMIT 1",
+        [c]
+      ).catch(() => null);
+
+      if (ogRow) {
+        matches.push({
+          cd_key: ogRow.cdkey,
+          expiry_date: '', // no expiry / lifetime
+          key_type: 'PREMIUM',
+          activation_date: String(ogRow.created_at || ''),
           expired: false,
         });
         break;

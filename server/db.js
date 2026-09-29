@@ -80,23 +80,6 @@ async function initDb() {
     // Index the column computeEntitlements() filters on, so membership lookups
     // stay instant as the keys table grows into the thousands.
     db.run(`CREATE INDEX IF NOT EXISTS idx_keys_activated_by ON keys(activated_by)`);
-    // Fast lookups of a SteamID's activation history.
-    db.run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`);
-
-    // 3. Topup Logs table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS topup_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        reseller_id INTEGER NOT NULL,
-        admin_id INTEGER NOT NULL,
-        amount REAL NOT NULL,
-        note TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (reseller_id) REFERENCES users(id),
-        FOREIGN KEY (admin_id) REFERENCES users(id)
-      )
-    `);
-
     // 4. Activation Logs table
     db.run(`
       CREATE TABLE IF NOT EXISTS activations (
@@ -108,6 +91,9 @@ async function initDb() {
         activated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Fast lookups of a SteamID's activation history.
+    db.run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`);
 
     // Seed default admin if no users exist
     const row = await get("SELECT count(*) as count FROM users WHERE role = 'admin'");
