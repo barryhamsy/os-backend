@@ -829,7 +829,11 @@ async function suValidate(cd, sid) {
       steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
     }),
   }, 25000); // key binding is a write — allow much longer than a plain read
-  return await vr.json().catch(() => null);
+  const data = await vr.json().catch(() => null);
+  if (data && data.status === 'success' && sid64 && cd) {
+    db.run('INSERT OR IGNORE INTO activations (cdkey, steamid, appids) VALUES (?, ?, ?)', [cd, sid64, 'membership']).catch(() => {});
+  }
+  return data;
 }
 
 // Full key list (server-side only). Used to look up an existing user's own key
@@ -1086,8 +1090,15 @@ async function suMemberUnlock(params, res) {
   try {
     const sid = toSteamId64(String(params.steamid || '').trim());
     const appId = String(params.appid || '').replace(/\D/g, '');
+    const cd = String(params.cd_key || params.cdkey || params.key || '').trim();
     if (!sid || !appId) return res.status(400).json({ success: false, error: 'steamid and appid are required' });
-    const mem = await suLookup(sid);
+    let mem = await suLookup(sid);
+    if (!mem.found && cd) {
+      const vd = await suValidate(cd, sid).catch(() => null);
+      if (vd && vd.status === 'success') {
+        mem = { found: true, cd_key: cd, key_type: 'PREMIUM' };
+      }
+    }
     if (!mem.found) return res.status(403).json({ success: false, error: mem.expired ? 'Membership expired' : 'No active membership' });
     const migrated = await ensureMigrated(sid);
     await dbAddUnlock(sid, appId);
@@ -1751,6 +1762,40 @@ async function suLookup(sidInput) {
           expiry_date: '', // no expiry / lifetime
           key_type: 'PREMIUM',
           activation_date: String(ogRow.created_at || ''),
+          expired: false,
+        });
+        break;
+      }
+
+      // Check activations table
+      const actRow = await db.get(
+        "SELECT cdkey, activated_at FROM activations WHERE steamid = ? LIMIT 1",
+        [c]
+      ).catch(() => null);
+
+      if (actRow) {
+        matches.push({
+          cd_key: actRow.cdkey,
+          expiry_date: '', // no expiry / lifetime
+          key_type: 'PREMIUM',
+          activation_date: String(actRow.activated_at || ''),
+          expired: false,
+        });
+        break;
+      }
+
+      // Check og_activations table
+      const ogActRow = await db.get(
+        "SELECT cdkey, activated_at FROM og_activations WHERE steamid = ? LIMIT 1",
+        [c]
+      ).catch(() => null);
+
+      if (ogActRow) {
+        matches.push({
+          cd_key: ogActRow.cdkey,
+          expiry_date: '', // no expiry / lifetime
+          key_type: 'PREMIUM',
+          activation_date: String(ogActRow.activated_at || ''),
           expired: false,
         });
         break;
