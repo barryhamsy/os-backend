@@ -33,19 +33,50 @@ db.run(`CREATE TABLE IF NOT EXISTS member_unlocks (
   PRIMARY KEY (steamid, appid)
 )`).catch((e) => console.error('[member_unlocks] init failed:', e.message));
 
+const STEAM64_BASE = 76561197960265728n;
+function toSteamId64(id) {
+  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
+  catch { return String(id); }
+}
+
+function getSteamIdCandidates(sidInput) {
+  const sidStr = String(sidInput || '').trim();
+  if (!sidStr) return [];
+  const set = new Set([sidStr]);
+  try {
+    const n = BigInt(sidStr);
+    if (n > STEAM64_BASE) {
+      set.add(String(n - STEAM64_BASE));
+    } else if (n > 0n) {
+      set.add(String(n + STEAM64_BASE));
+    }
+  } catch {}
+  return [...set];
+}
+
 async function dbGetUnlocks(sid) {
-  const rows = await db.all('SELECT appid FROM member_unlocks WHERE steamid = ?', [String(sid)]);
+  const candidates = getSteamIdCandidates(sid);
+  if (!candidates.length) return [];
+  const placeholders = candidates.map(() => '?').join(',');
+  const rows = await db.all(`SELECT DISTINCT appid FROM member_unlocks WHERE steamid IN (${placeholders})`, candidates);
   return rows.map((r) => String(r.appid));
 }
 async function dbAddUnlock(sid, appid) {
-  await db.run('INSERT OR IGNORE INTO member_unlocks (steamid, appid, added_at) VALUES (?,?,?)',
-    [String(sid), String(appid), Date.now()]);
+  const candidates = getSteamIdCandidates(sid);
+  const now = Date.now();
+  for (const c of candidates) {
+    await db.run('INSERT OR IGNORE INTO member_unlocks (steamid, appid, added_at) VALUES (?,?,?)',
+      [c, String(appid), now]).catch(() => {});
+  }
 }
 async function dbAddUnlocks(sid, appids) {
   for (const a of appids) await dbAddUnlock(sid, a);
 }
 async function dbRemoveUnlock(sid, appid) {
-  await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [String(sid), String(appid)]);
+  const candidates = getSteamIdCandidates(sid);
+  for (const c of candidates) {
+    await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [c, String(appid)]).catch(() => {});
+  }
 }
 
 // Debounced, best-effort GitHub backup of a user's unlock list. Coalesces a
@@ -727,11 +758,6 @@ async function readUsersJsonAppids(sid64) {
   }
 }
 
-const STEAM64_BASE = 76561197960265728n;
-function toSteamId64(id) {
-  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
-  catch { return String(id); }
-}
 
 app.get('/api/entitlements/:steamid', async (req, res) => {
   try {
