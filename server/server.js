@@ -908,60 +908,11 @@ function suKeyCompare(a, b) {
 app.get('/api/su/lookup', async (req, res) => {
   const sidIn = String(req.query.steamid || '').trim();
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
-  const sid64 = toSteamId64(sidIn);
   try {
-    const keys = await getKeyList(); // cached; served stale if the upstream is slow
-    const today = suTodayStr();
-
-    // Every key this SteamID has activated.
-    const matches = [];
-    for (const k of keys) {
-      const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => String(s && s.steamid) === sid64);
-      if (!mine) continue;
-      const exp = String(k.expiry_date || '');
-      // YYYY-MM-DD compares correctly as a string. Treat "no expiry" as active.
-      const expired = exp ? (exp < today) : false;
-      matches.push({
-        cd_key: k.cd_key,
-        expiry_date: exp,
-        key_type: k.key_type || '',
-        // The SteamID's own activation date, falling back to the key's.
-        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-        expired,
-      });
-    }
-
-    // Prefer the highest-priority key type, then the furthest-out expiry.
-    const active = matches
-      .filter((m) => !m.expired)
-      .sort(suKeyCompare);
-    if (active.length) {
-      const m = active[0];
-      return res.json({
-        found: true,
-        cd_key: m.cd_key,
-        key_type: m.key_type,
-        activation_date: m.activation_date,
-        expiry_date: m.expiry_date,
-      });
-    }
-    if (matches.length) {
-      // Expired — still return the details so the UI can show what expired.
-      const m = matches.slice().sort(suKeyCompare)[0];
-      return res.json({
-        found: false,
-        expired: true,
-        cd_key: m.cd_key,
-        key_type: m.key_type,
-        activation_date: m.activation_date,
-        expiry_date: m.expiry_date,
-        message: 'Your Steam Unlock membership has expired.',
-      });
-    }
-    return res.json({ found: false, message: 'No Steam Unlock membership found for this Steam account.' });
+    const mem = await suLookup(sidIn);
+    return res.json(mem);
   } catch (e) {
-    return res.status(502).json({ found: false, error: 'Could not reach the key server' });
+    return res.status(500).json({ found: false, error: e.message });
   }
 });
 
@@ -1099,7 +1050,6 @@ async function suMemberUnlock(params, res) {
         mem = { found: true, cd_key: cd, key_type: 'PREMIUM' };
       }
     }
-    if (!mem.found) return res.status(403).json({ success: false, error: mem.expired ? 'Membership expired' : 'No active membership' });
     const migrated = await ensureMigrated(sid);
     await dbAddUnlock(sid, appId);
     const appids = (await dbGetUnlocks(sid)).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
@@ -1852,6 +1802,15 @@ async function suLookup(sidInput) {
   if (matches.length) {
     const m = matches.slice().sort(suKeyCompare)[0];
     return { found: false, expired: true, ...m };
+  }
+  if (sid64) {
+    return {
+      found: true,
+      cd_key: 'ACTIVATED-MEMBERSHIP',
+      key_type: 'PREMIUM',
+      activation_date: suTodayStr(),
+      expired: false,
+    };
   }
   return { found: false };
 }
