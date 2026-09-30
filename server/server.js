@@ -1018,18 +1018,35 @@ app.get('/api/patch-info/:appid', async (req, res) => {
   const appid = String(req.params.appid || '').replace(/\D/g, '');
   if (!appid) return res.status(400).json({ error: 'appid required' });
   try {
-    // Serve from the shared 10-minute catalog cache (deduped, timed). This used
-    // to fetch the FULL catalog on every call — the plugin hits this once per
-    // installed game, so a large library hammered api/onennabe and crashed us.
     await getGameCatalog();
     const g = gamesCache.byId && gamesCache.byId.get(appid);
-    if (!g) return res.json({ appid, found: false, patchable: false });
+    let online = g ? !!g.online_supported : false;
+    let bypass = g ? !!g.bypass_supported : false;
+    let hyper  = g ? !!g.hypervisor_bypass : false;
+    let isPatchable = online || bypass || hyper;
+
+    // Fallback: check if GitHub branch exists if catalog flags are false or appid not found in catalog
+    if (!isPatchable && PATCH_GITHUB_TOKEN) {
+      try {
+        const ghUrl = `https://api.github.com/repos/${PATCH_REPO}/branches/${appid}`;
+        const ghRes = await fetchT(ghUrl, {
+          headers: { Authorization: `Bearer ${PATCH_GITHUB_TOKEN}`, 'User-Agent': 'OpenSteamTool', Accept: 'application/vnd.github+json' }
+        }, 5000);
+        if (ghRes.ok) {
+          isPatchable = true;
+          bypass = true;
+        }
+      } catch (_) {}
+    }
+
     return res.json({
-      appid, found: true, name: g.name || '',
-      online_supported: g.online_supported,
-      bypass_supported: g.bypass_supported,
-      hypervisor_bypass: g.hypervisor_bypass,
-      patchable: g.online_supported || g.bypass_supported || g.hypervisor_bypass,
+      appid,
+      found: !!g || isPatchable,
+      name: (g && g.name) || '',
+      online_supported: online,
+      bypass_supported: bypass,
+      hypervisor_bypass: hyper,
+      patchable: isPatchable,
     });
   } catch (e) {
     return res.status(502).json({ error: 'catalog unreachable' });
@@ -1167,7 +1184,12 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
 const GAMES_API_URL = process.env.GAMES_API_URL || 'https://steamunlockonennabe.duckdns.org/api/onennabe';
 const GAMES_CACHE_MS = 60 * 60 * 1000; // 1 hour TTL for game catalog cache
 let gamesCache = { data: null, byId: null, genres: [], fetchedAt: 0, pending: null };
-const _yesFlag = (v) => v === true || v === 'Yes' || v === 'yes' || v === '1' || v === 1;
+const _yesFlag = (v) => {
+  if (!v) return false;
+  if (v === true || v === 1) return true;
+  const s = String(v).trim().toLowerCase();
+  return s === 'yes' || s === 'true' || s === '1';
+};
 
 // Primary-genre mapping (the catalog's numeric primary_genre → display name).
 const GENRE_MAP = {
