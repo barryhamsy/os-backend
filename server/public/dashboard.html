@@ -747,7 +747,9 @@ function setBannerCover(bannerEl, appid, preferredUrl) {
   const sources = [];
   if (preferredUrl) sources.push(preferredUrl);
 
-  const cardImg = document.querySelector(`.game img[src*="${appid}"]`);
+  const cardBtn = document.querySelector(`[data-appid="${appid}"]`);
+  const cardEl = cardBtn ? cardBtn.closest('.game') : null;
+  const cardImg = cardEl ? cardEl.querySelector('img') : document.querySelector(`.game img[src*="${appid}"]`);
   if (cardImg && cardImg.src && !cardImg.src.includes('data:image') && !sources.includes(cardImg.src)) {
     sources.push(cardImg.src);
   }
@@ -780,6 +782,8 @@ function setBannerCover(bannerEl, appid, preferredUrl) {
         this.src = sources[idx];
       } else if (this._workingUrl) {
         this.src = this._workingUrl;
+      } else if (cardImg && cardImg.src) {
+        this.src = cardImg.src;
       }
     };
   } else if (preferredUrl) {
@@ -831,7 +835,9 @@ async function openGameModal(g) {
   shotsSec.classList.add('hide');
   shotsGrid.innerHTML = '';
 
-  const cardImg = document.querySelector(`.game img[src*="${g.appid}"]`);
+  const cardBtn = document.querySelector(`[data-appid="${g.appid}"]`);
+  const cardEl = cardBtn ? cardBtn.closest('.game') : null;
+  const cardImg = cardEl ? cardEl.querySelector('img') : document.querySelector(`.game img[src*="${g.appid}"]`);
   const initialCover = (cardImg && cardImg.src && !cardImg.src.includes('data:image')) ? cardImg.src : null;
   setBannerCover(banner, g.appid, initialCover);
 
@@ -874,7 +880,6 @@ async function openGameModal(g) {
     relEl.textContent = info.releaseDate || '—';
     descEl.innerHTML = info.about_the_game || info.description || 'No detailed description available for this title.';
 
-    let hasVideo = false;
     if (info.movies && info.movies.length > 0) {
       const m = info.movies[0];
       let videoSrc = (m.mp4 && (m.mp4['max'] || m.mp4['480'])) || (m.webm && (m.webm['max'] || m.webm['480'])) || (typeof m.mp4 === 'string' ? m.mp4 : '') || (typeof m.webm === 'string' ? m.webm : '');
@@ -889,35 +894,24 @@ async function openGameModal(g) {
         v.loop = true;
         if (m.thumbnail) v.poster = m.thumbnail;
 
-        let videoFailed = false;
-        const handleVideoError = () => {
-          if (videoFailed) return;
-          videoFailed = true;
-          if (String(currentModalAppid) === String(g.appid)) {
-            setBannerCover(banner, g.appid, info.cover || initialCover);
+        let swapped = false;
+        v.oncanplay = () => {
+          if (!swapped && String(currentModalAppid) === String(g.appid)) {
+            swapped = true;
+            banner.style.display = 'block';
+            banner.innerHTML = '';
+            banner.appendChild(v);
           }
         };
 
-        v.onerror = handleVideoError;
         const source = document.createElement('source');
         source.src = videoSrc;
-        source.onerror = handleVideoError;
         v.appendChild(source);
-
-        banner.style.display = 'block';
-        banner.innerHTML = '';
-        banner.appendChild(v);
-        hasVideo = true;
-
-        setTimeout(() => {
-          if (v.readyState === 0 && !videoFailed) {
-            handleVideoError();
-          }
-        }, 3500);
       }
     }
-    if (!hasVideo) {
-      setBannerCover(banner, g.appid, info.cover || initialCover);
+
+    if (info.cover) {
+      setBannerCover(banner, g.appid, info.cover);
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
