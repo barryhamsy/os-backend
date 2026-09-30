@@ -337,13 +337,11 @@ const $ = (id) => document.getElementById(id);
 let ME = null;              // { steamid, membership, appids }
 let unlocked = new Set();   // appids the user already has
 
-async function api(path, opts, timeoutMs) {
+async function api(path, opts) {
   // Hard client-side timeout so a slow/hung endpoint (e.g. a 504) can't leave
-  // the UI spinning forever. Activation calls pass a longer timeout because the
-  // server waits up to 25s for the upstream key validator.
-  const ms = timeoutMs || 15000;
+  // the UI spinning forever.
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort('Timed out after ' + (ms/1000) + 's'), ms);
+  const t = setTimeout(() => ac.abort(), 15000);
   let r;
   try {
     r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
@@ -647,8 +645,7 @@ async function activateKey() {
   if (!cd) { st.style.color='var(--red)'; st.textContent='Enter your CD key.'; return; }
   btn.disabled=true; st.style.color='var(--muted)'; st.innerHTML='<span class="spin"></span> Activating…';
   try {
-    // 35s timeout: the server waits up to 25s for the upstream CD-key validator.
-    const r = await api('/dash/api/activate', { method:'POST', body: JSON.stringify({ cd_key: cd }) }, 35000);
+    const r = await api('/dash/api/activate', { method:'POST', body: JSON.stringify({ cd_key: cd }) });
     if (r.status === 'success') {
       st.style.color='var(--green)'; st.textContent = r.message || 'Activated! Membership is now active.';
       $('cdkey').value='';

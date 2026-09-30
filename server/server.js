@@ -17,7 +17,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ost-secret-jwt-key-change-in-produ
 // timeout makes it reject fast instead — callers already .catch() and fall back.
 async function fetchT(url, opts = {}, ms = 8000) {
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(`Request timed out (${ms}ms)`), ms);
+  const t = setTimeout(() => ac.abort(), ms);
   try { return await fetch(url, { ...opts, signal: ac.signal }); }
   finally { clearTimeout(t); }
 }
