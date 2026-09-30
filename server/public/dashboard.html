@@ -739,29 +739,48 @@ function closeLightbox() {
 function setBannerCover(bannerEl, appid, preferredUrl) {
   if (!bannerEl) return;
   bannerEl.style.display = 'block';
+
   const sources = [];
   if (preferredUrl) sources.push(preferredUrl);
+
+  const cardImg = document.querySelector(`.game img[src*="${appid}"]`);
+  if (cardImg && cardImg.src && !cardImg.src.includes('data:image') && !sources.includes(cardImg.src)) {
+    sources.push(cardImg.src);
+  }
+
   sources.push(
     'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/header.jpg',
     'https://cdn.cloudflare.steamstatic.com/steam/apps/' + appid + '/header.jpg',
-    'https://cdn.akamai.steamstatic.com/steam/apps/' + appid + '/header.jpg',
     'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/' + appid + '/capsule_616x353.jpg',
     '/api/sgdb/header/' + appid,
     '/api/screenshot/' + appid
   );
 
-  const firstSrc = sources[0];
-  bannerEl.innerHTML = `<img src="${esc(firstSrc)}" alt="Cover">`;
-  const imgEl = bannerEl.querySelector('img');
-  if (!imgEl) return;
+  let activeImg = bannerEl.querySelector('img');
 
-  let idx = 0;
-  imgEl.onerror = function() {
-    idx++;
-    if (idx < sources.length) {
-      this.src = sources[idx];
-    }
-  };
+  if (!activeImg) {
+    bannerEl.innerHTML = `<img src="${esc(sources[0])}" alt="Cover">`;
+    activeImg = bannerEl.querySelector('img');
+  } else if (preferredUrl) {
+    const testImg = new Image();
+    testImg.onload = () => {
+      if (String(currentModalAppid) === String(appid) && activeImg) {
+        activeImg.src = preferredUrl;
+      }
+    };
+    testImg.src = preferredUrl;
+    return;
+  }
+
+  if (activeImg) {
+    let idx = 0;
+    activeImg.onerror = function() {
+      idx++;
+      if (idx < sources.length) {
+        this.src = sources[idx];
+      }
+    };
+  }
 }
 
 async function openGameModal(g) {
@@ -844,19 +863,8 @@ async function openGameModal(g) {
         hasVideo = true;
       }
     }
-    const candidateCover = info.cover || (info.screenshots && info.screenshots.length ? info.screenshots[0] : null);
-    if (!hasVideo && candidateCover) {
-      const testImg = new Image();
-      testImg.onload = () => {
-        if (String(currentModalAppid) === String(g.appid)) {
-          banner.style.display = 'block';
-          banner.innerHTML = `<img src="${esc(candidateCover)}" alt="Cover">`;
-        }
-      };
-      testImg.onerror = () => {
-        // Candidate cover failed: keep initial working cover banner untouched!
-      };
-      testImg.src = candidateCover;
+    if (!hasVideo && info.cover) {
+      setBannerCover(banner, g.appid, info.cover);
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
