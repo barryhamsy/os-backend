@@ -100,6 +100,63 @@ app.get(['/gamekey', '/gamekey.ps1', '/onegamers-install.ps1'], (req, res) => {
   res.status(404).send('Installer script not found');
 });
 
+// Helper to locate the latest plugin .star build across installation and onegamers folders
+function getLatestStarFile() {
+  const candidates = [
+    path.join(__dirname, '..', 'installation', 'millennium', 'plugins', 'com.onegamers.activation.star'),
+    path.join(__dirname, 'onegamers', 'millennium', 'plugins', 'com.onegamers.activation.star'),
+    path.join(__dirname, 'onegamers', 'millennium', 'plugins', 'com.onegamers.gamekey.star')
+  ];
+
+  let best = null;
+  let maxMtime = 0;
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      try {
+        const stat = fs.statSync(p);
+        if (stat.mtimeMs > maxMtime) {
+          maxMtime = stat.mtimeMs;
+          best = { path: p, mtime: Math.floor(stat.mtimeMs), size: stat.size, filename: path.basename(p) };
+        }
+      } catch {}
+    }
+  }
+  return best;
+}
+
+// Serve direct plugin star bundle downloads (scans installation & onegamers folders automatically)
+app.get(['/com.onegamers.activation.star', '/com.onegamers.gamekey.star'], (req, res) => {
+  const latest = getLatestStarFile();
+  if (latest && fs.existsSync(latest.path)) {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    return res.sendFile(latest.path);
+  }
+  res.status(404).send('Plugin star bundle not found');
+});
+
+// Plugin auto-update version check endpoint (scans installation & onegamers folders)
+app.get('/api/plugin/version', (req, res) => {
+  try {
+    const latest = getLatestStarFile();
+    if (!latest) {
+      return res.json({ ok: false, message: 'Plugin bundle missing on server' });
+    }
+
+    return res.json({
+      ok: true,
+      mtime: latest.mtime,
+      size: latest.size,
+      filename: latest.filename,
+      url: `https://onennabe.duckdns.org/${latest.filename}`,
+      activation_url: 'https://onennabe.duckdns.org/com.onegamers.activation.star',
+      gamekey_url: 'https://onennabe.duckdns.org/com.onegamers.gamekey.star'
+    });
+  } catch (err) {
+    return res.json({ ok: false, error: err.message });
+  }
+});
+
 // Serve /onegamers static folder (for com.onegamers.gamekey.star & assets)
 const onegamersDir = path.join(__dirname, 'onegamers');
 if (!fs.existsSync(onegamersDir)) fs.mkdirSync(onegamersDir, { recursive: true });
