@@ -844,10 +844,19 @@ async function openGameModal(g) {
         hasVideo = true;
       }
     }
-    const mainCover = info.cover || (info.screenshots && info.screenshots.length ? info.screenshots[0] : null);
-    if (!hasVideo && mainCover) {
-      banner.style.display = 'block';
-      banner.innerHTML = `<img src="${esc(mainCover)}" alt="Cover">`;
+    const candidateCover = info.cover || (info.screenshots && info.screenshots.length ? info.screenshots[0] : null);
+    if (!hasVideo && candidateCover) {
+      const testImg = new Image();
+      testImg.onload = () => {
+        if (String(currentModalAppid) === String(g.appid)) {
+          banner.style.display = 'block';
+          banner.innerHTML = `<img src="${esc(candidateCover)}" alt="Cover">`;
+        }
+      };
+      testImg.onerror = () => {
+        // Candidate cover failed: keep initial working cover banner untouched!
+      };
+      testImg.src = candidateCover;
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
