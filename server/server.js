@@ -1263,7 +1263,13 @@ function _buildCatalog(list) {
 
 function _applyCatalog(data, genres, fetchedAt) {
   gamesCache.data = data;
-  gamesCache.byId = new Map(data.map(g => [g.appid, g]));
+  const byId = new Map();
+  const len = data ? data.length : 0;
+  for (let i = 0; i < len; i++) {
+    const g = data[i];
+    byId.set(g.appid, g);
+  }
+  gamesCache.byId = byId;
   gamesCache.genres = genres || [];
   gamesCache.fetchedAt = fetchedAt || Date.now();
 }
@@ -1327,10 +1333,14 @@ async function getGameCatalog() {
   }
 }
 
-// Keep the cache warm so no user request ever waits on the upstream, and warm
-// once shortly after boot (deferred so it never blocks startup).
+// Keep the cache warm so no user request ever waits on the upstream.
+// Only fetch if missing or older than cache TTL.
 setInterval(() => { refreshCatalog().catch(() => {}); }, GAMES_CACHE_MS);
-setTimeout(() => { refreshCatalog().catch(() => {}); }, 2000);
+setTimeout(() => {
+  if (!gamesCache.data || (Date.now() - gamesCache.fetchedAt > GAMES_CACHE_MS)) {
+    refreshCatalog().catch(() => {});
+  }
+}, 30000);
 
 // Search games by name or AppID (with full catalog pagination & filters)
 app.get('/api/games', authenticateToken, async (req, res) => {
