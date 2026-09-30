@@ -723,12 +723,6 @@ function openLightbox(index) {
   const counter = $('lightbox-counter');
   if (img) img.src = url;
   if (counter) counter.textContent = (currentScreenshotIdx + 1) + ' / ' + currentScreenshots.length;
-  
-  const banner = $('modal-banner');
-  if (banner) {
-    banner.style.display = 'block';
-    banner.innerHTML = `<img src="${esc(url)}" alt="Screenshot">`;
-  }
   $('lightbox-modal').classList.add('active');
 }
 
@@ -740,6 +734,16 @@ function setBannerCover(bannerEl, appid, preferredUrl) {
   if (!bannerEl) return;
   bannerEl.style.display = 'block';
 
+  const sAppid = String(appid);
+  let activeImg = bannerEl.querySelector('img');
+
+  // If banner currently has a video element or an image from a different appid, reset it.
+  if (bannerEl.querySelector('video') || (activeImg && activeImg._appid !== sAppid)) {
+    bannerEl.innerHTML = '';
+    activeImg = null;
+  }
+
+  // Candidate sources list for initial load / fallback
   const sources = [];
   if (preferredUrl) sources.push(preferredUrl);
 
@@ -756,30 +760,47 @@ function setBannerCover(bannerEl, appid, preferredUrl) {
     '/api/screenshot/' + appid
   );
 
-  let activeImg = bannerEl.querySelector('img');
-
   if (!activeImg) {
+    // Initial creation of banner img
     bannerEl.innerHTML = `<img src="${esc(sources[0])}" alt="Cover">`;
     activeImg = bannerEl.querySelector('img');
-  } else if (preferredUrl) {
-    const testImg = new Image();
-    testImg.onload = () => {
-      if (String(currentModalAppid) === String(appid) && activeImg) {
-        activeImg.src = preferredUrl;
+    if (!activeImg) return;
+    activeImg._appid = sAppid;
+
+    let idx = 0;
+    activeImg.onload = function() {
+      if (this.naturalWidth > 0) {
+        this._workingUrl = this.src;
       }
     };
-    testImg.src = preferredUrl;
-    return;
-  }
 
-  if (activeImg) {
-    let idx = 0;
     activeImg.onerror = function() {
       idx++;
       if (idx < sources.length) {
         this.src = sources[idx];
+      } else if (this._workingUrl) {
+        this.src = this._workingUrl;
       }
     };
+  } else if (preferredUrl) {
+    // If activeImg already exists for this appid, pre-test preferredUrl in memory.
+    // If preferredUrl is already what's showing or working, skip.
+    if (activeImg.src === preferredUrl || activeImg._workingUrl === preferredUrl) return;
+
+    const testImg = new Image();
+    testImg.onload = () => {
+      if (String(currentModalAppid) === sAppid && activeImg && testImg.naturalWidth > 0) {
+        const fallbackUrl = activeImg._workingUrl || activeImg.src;
+        activeImg._workingUrl = preferredUrl;
+        activeImg.onerror = function() {
+          if (fallbackUrl) this.src = fallbackUrl;
+        };
+        activeImg.src = preferredUrl;
+      }
+    };
+    // If testImg fails to load (404, CORS, region-locked), do NOTHING!
+    // activeImg remains displaying its current working cover image permanently.
+    testImg.src = preferredUrl;
   }
 }
 
