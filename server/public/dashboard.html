@@ -697,6 +697,7 @@ let currentModalAppid = null;
 
 function setBannerCover(bannerEl, appid, preferredUrl) {
   if (!bannerEl) return;
+  bannerEl.style.display = '';
   const sources = [];
   if (preferredUrl) sources.push(preferredUrl);
   sources.push(
@@ -708,22 +709,18 @@ function setBannerCover(bannerEl, appid, preferredUrl) {
     '/api/screenshot/' + appid
   );
 
+  const firstSrc = sources[0];
+  bannerEl.innerHTML = `<img src="${esc(firstSrc)}" alt="Cover">`;
+  const imgEl = bannerEl.querySelector('img');
+  if (!imgEl) return;
+
   let idx = 0;
-  function tryNext() {
-    if (idx >= sources.length) return;
-    const src = sources[idx++];
-    const img = new Image();
-    img.onload = () => {
-      if (String(currentModalAppid) === String(appid)) {
-        bannerEl.innerHTML = `<img src="${esc(src)}" alt="Cover">`;
-      }
-    };
-    img.onerror = () => {
-      tryNext();
-    };
-    img.src = src;
-  }
-  tryNext();
+  imgEl.onerror = function() {
+    idx++;
+    if (idx < sources.length) {
+      this.src = sources[idx];
+    }
+  };
 }
 
 async function openGameModal(g) {
@@ -804,7 +801,9 @@ async function openGameModal(g) {
       }
     }
     if (!hasVideo && info.cover) {
-      setBannerCover(banner, g.appid, info.cover);
+      const imgEl = banner.querySelector('img');
+      if (imgEl) { imgEl.src = info.cover; }
+      else { setBannerCover(banner, g.appid, info.cover); }
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
@@ -912,7 +911,8 @@ async function unlockGame(g, btn) {
     const r = await api('/dash/api/unlock', { method:'POST', body: JSON.stringify({ appid: g.appid }) });
     if (r.success) {
       unlocked = new Set((r.appids||[]).map(String));
-      fillCardBody(btn.closest('.game'), g);
+      const gameEl = btn ? btn.closest('.game') : null;
+      if (gameEl) fillCardBody(gameEl, g);
     } else {
       alert(r.error || 'Unlock failed'); btn.disabled=false; btn.textContent='Unlock game';
     }
@@ -925,7 +925,8 @@ async function removeGame(g, btn) {
     const r = await api('/dash/api/remove', { method:'POST', body: JSON.stringify({ appid: g.appid }) });
     if (r.success) {
       unlocked = new Set((r.appids||[]).map(String));
-      fillCardBody(btn.closest('.game'), g);
+      const gameEl = btn ? btn.closest('.game') : null;
+      if (gameEl) fillCardBody(gameEl, g);
     } else {
       alert(r.error || 'Remove failed'); btn.disabled=false; btn.textContent='Remove';
     }
