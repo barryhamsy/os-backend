@@ -15,10 +15,16 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ost-secret-jwt-key-change-in-produ
 // slow/hung upstream (the CD-key server, GitHub, Steam, SGDB) can hang a request
 // until the reverse proxy gives up with a 504. Wrapping every external call in a
 // timeout makes it reject fast instead — callers already .catch() and fall back.
-async function fetchT(url, opts = {}, ms = 8000) {
+async function fetchT(url, opts = {}, ms = 30000) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), ms);
   try { return await fetch(url, { ...opts, signal: ac.signal }); }
+  catch (err) {
+    if (err.name === 'AbortError' || (err.message && err.message.includes('aborted'))) {
+      throw new Error(`Request to ${url} timed out after ${ms}ms`);
+    }
+    throw err;
+  }
   finally { clearTimeout(t); }
 }
 
