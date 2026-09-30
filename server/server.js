@@ -1167,7 +1167,7 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
 const GAMES_API_URL = process.env.GAMES_API_URL || 'https://steamunlockonennabe.duckdns.org/api/onennabe';
 const GAMES_CACHE_MS = 10 * 60 * 1000;
 let gamesCache = { data: null, byId: null, genres: [], fetchedAt: 0, pending: null };
-const _yesFlag = (v) => { const s = String(v == null ? '' : v).trim().toLowerCase(); return s === 'yes' || s === '1' || s === 'true'; };
+const _yesFlag = (v) => v === true || v === 'Yes' || v === 'yes' || v === '1' || v === 1;
 
 // Primary-genre mapping (the catalog's numeric primary_genre → display name).
 const GENRE_MAP = {
@@ -1197,14 +1197,16 @@ function isAdultGame(game) {
     return false;
   } catch (e) { return false; }
 }
-// Parse "10.88 GB" / "512 MB" → number of GB (float). Unknown → 0.
+// Fast parse "10.88 GB" / "512 MB" → float GB without regex allocation
 function parseSizeGB(s) {
-  const m = String(s || '').match(/([\d.]+)\s*(GB|MB|TB)?/i);
-  if (!m) return 0;
-  let v = parseFloat(m[1]); if (isNaN(v)) return 0;
-  const unit = (m[2] || 'GB').toUpperCase();
-  if (unit === 'MB') v /= 1024; else if (unit === 'TB') v *= 1024;
-  return v;
+  if (!s) return 0;
+  const num = parseFloat(s);
+  if (isNaN(num)) return 0;
+  if (typeof s === 'string') {
+    if (s.includes('MB') || s.includes('mb')) return num / 1024;
+    if (s.includes('TB') || s.includes('tb')) return num * 1024;
+  }
+  return num;
 }
 // Size bucket key for filtering.
 function sizeBucket(gb) {
@@ -1217,32 +1219,45 @@ function sizeBucket(gb) {
 
 const CATALOG_CACHE_FILE = path.join(__dirname, 'catalog_cache.json');
 
-// Turn the raw upstream list into our slim catalog shape + genre facet.
+// High-efficiency catalog builder: single pass, no intermediate array allocations
 function _buildCatalog(list) {
-  const data = list
-    // Drop membership-only catalog entries entirely — they aren't unlockable here.
-    .filter(g => g && g.appid && g.name && g.requires_membership !== true)
-    .map(g => {
-      const gid = String(g.primary_genre || '').trim();
-      const gb = parseSizeGB(g.size_gb);
-      return {
-        appid: String(g.appid),
-        name: String(g.name),
-        genre: gid,
-        genreName: genreName(gid),
-        size_gb: String(g.size_gb || ''),
-        sizeGB: gb,
-        sizeBucket: sizeBucket(gb),
-        adult: isAdultGame(g),
-        online_supported: _yesFlag(g.online_supported),
-        bypass_supported: _yesFlag(g.bypass_supported),
-        hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
-      };
-    });
+  const len = list ? list.length : 0;
+  const data = [];
   const genreSet = new Map();
-  for (const g of data) if (g.genre) genreSet.set(g.genre, g.genreName);
-  const genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+
+  for (let i = 0; i < len; i++) {
+    const g = list[i];
+    if (!g || !g.appid || !g.name || g.requires_membership === true) continue;
+
+    const gid = g.primary_genre ? String(g.primary_genre).trim() : '';
+    const gName = GENRE_MAP[gid] || 'Other';
+    const gb = parseSizeGB(g.size_gb);
+
+    data.push({
+      appid: String(g.appid),
+      name: String(g.name),
+      genre: gid,
+      genreName: gName,
+      size_gb: g.size_gb || '',
+      sizeGB: gb,
+      sizeBucket: gb <= 0 ? 'unknown' : (gb < 5 ? 'lt5' : (gb < 20 ? '5to20' : (gb < 50 ? '20to50' : 'gt50'))),
+      adult: isAdultGame(g),
+      online_supported: _yesFlag(g.online_supported),
+      bypass_supported: _yesFlag(g.bypass_supported),
+      hypervisor_bypass: _yesFlag(g.hypervisor_bypass),
+    });
+
+    if (gid && !genreSet.has(gid)) {
+      genreSet.set(gid, gName);
+    }
+  }
+
+  const genres = [];
+  for (const [id, name] of genreSet.entries()) {
+    genres.push({ id, name });
+  }
+  genres.sort((a, b) => a.name.localeCompare(b.name));
+
   return { data, genres };
 }
 
