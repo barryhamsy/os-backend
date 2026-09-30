@@ -337,14 +337,20 @@ const $ = (id) => document.getElementById(id);
 let ME = null;              // { steamid, membership, appids }
 let unlocked = new Set();   // appids the user already has
 
-async function api(path, opts) {
+async function api(path, opts = {}) {
   // Hard client-side timeout so a slow/hung endpoint (e.g. a 504) can't leave
   // the UI spinning forever.
+  const timeoutMs = opts.timeoutMs || 60000;
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 15000);
+  const t = setTimeout(() => ac.abort(), timeoutMs);
   let r;
   try {
     r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
+  } catch (err) {
+    if (err.name === 'AbortError' || (err.message && err.message.includes('aborted'))) {
+      throw new Error('Request timed out. Please try again.');
+    }
+    throw err;
   } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
   if (r.status >= 500) throw new Error('http ' + r.status); // 5xx / 504 → caller treats as failure
