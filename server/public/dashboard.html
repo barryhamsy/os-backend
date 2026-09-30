@@ -432,11 +432,6 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
           </div>
         </div>
 
-        <div>
-          <span class="meta-label" style="display:block;margin-bottom:8px">About This Game</span>
-          <div id="modal-desc" class="modal-desc">Loading description…</div>
-        </div>
-
         <div id="modal-shots-sec" class="hide">
           <div class="modal-shots-title">Screenshots</div>
           <div class="modal-slider-wrap">
@@ -444,6 +439,11 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
             <div id="modal-shots-grid" class="modal-shots-slider"></div>
             <button class="slider-btn next" id="shots-next-btn" title="Next">›</button>
           </div>
+        </div>
+
+        <div>
+          <span class="meta-label" style="display:block;margin-bottom:8px">About This Game</span>
+          <div id="modal-desc" class="modal-desc">Loading description…</div>
         </div>
       </div>
     </div>
@@ -762,14 +762,18 @@ async function openGameModal(g) {
     relEl.textContent = info.releaseDate || '—';
     descEl.innerHTML = info.about_the_game || info.description || 'No detailed description available for this title.';
 
+    let hasVideo = false;
     if (info.movies && info.movies.length > 0) {
       const m = info.movies[0];
-      const videoSrc = (m.webm && (m.webm['max'] || m.webm['480'])) || (m.mp4 && (m.mp4['max'] || m.mp4['480']));
+      const videoSrc = (typeof m === 'string' ? m : null) || (m.webm && (m.webm['max'] || m.webm['480'])) || (m.mp4 && (m.mp4['max'] || m.mp4['480'])) || (typeof m.mp4 === 'string' ? m.mp4 : '') || (typeof m.webm === 'string' ? m.webm : '');
       if (videoSrc) {
         banner.innerHTML = `<video class="modal-trailer" controls autoplay muted loop poster="${m.thumbnail || defaultCoverUrl}"><source src="${videoSrc}"></video>`;
+        hasVideo = true;
       }
-    } else if (info.cover) {
-      banner.innerHTML = `<img src="${info.cover}" alt="Cover">`;
+    }
+    if (!hasVideo) {
+      const coverUrl = info.cover || defaultCoverUrl;
+      banner.innerHTML = `<img src="${coverUrl}" onerror="this.src='/api/sgdb/header/${g.appid}'" alt="Cover">`;
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
