@@ -695,31 +695,6 @@ function gameCard(g) {
 
 let currentModalAppid = null;
 
-async function openGameModal(g) {
-  currentModalAppid = g.appid;
-  const modal = $('game-modal');
-  const banner = $('modal-banner');
-  const title = $('modal-title');
-  const appidEl = $('modal-appid');
-  const actionBox = $('modal-action-box');
-  const sizeEl = $('modal-size');
-  const genreEl = $('modal-genre');
-  const devEl = $('modal-dev');
-  const relEl = $('modal-rel');
-  const descEl = $('modal-desc');
-  const shotsSec = $('modal-shots-sec');
-  const shotsGrid = $('modal-shots-grid');
-
-  title.textContent = g.name;
-  appidEl.textContent = 'AppID ' + g.appid;
-  sizeEl.textContent = g.size_gb || '—';
-  genreEl.textContent = g.genreName || '—';
-  devEl.textContent = 'Loading…';
-  relEl.textContent = 'Loading…';
-  descEl.innerHTML = '<span class="spin"></span> Loading detailed description…';
-  shotsSec.classList.add('hide');
-  shotsGrid.innerHTML = '';
-
 function setBannerCover(bannerEl, appid, preferredUrl) {
   if (!bannerEl) return;
   const sources = [];
