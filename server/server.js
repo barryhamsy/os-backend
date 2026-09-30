@@ -1181,6 +1181,9 @@ const GENRE_MAP = {
 };
 function genreName(id) { return GENRE_MAP[Number(id)] || 'Other'; }
 
+// Pre-compiled regex (compiled once at module level instead of 150,000+ times per catalog refresh)
+const ADULT_KEYWORD_RE = /\bpornocrates\b|\bpornstar\b|\bsuccubus\b|\bsexdivers\b|\bsextet\b|\bsexy\b|\bpleasure\b|\bhentai\b|\bsex2\b|\bsex\b|\bsexual\b|\becchi\b|\bnsfw\b|\beroge\b|\bxxx\b|\br18\b|18\+|\bnude\b|\bnudity\b|\buncensored\b/;
+
 // Adult detector — content_descriptors (preferred), primary_genre fallback, then
 // name-keyword heuristics for mislabeled titles.
 function isAdultGame(game) {
@@ -1190,7 +1193,6 @@ function isAdultGame(game) {
     const pg = Number(game && game.primary_genre);
     if (pg === 71 || pg === 72) return true;
     const name = String((game && game.name) || '').toLowerCase();
-    const ADULT_KEYWORD_RE = /\bpornocrates\b|\bpornstar\b|\bsuccubus\b|\bsexdivers\b|\bsextet\b|\bsexy\b|\bpleasure\b|\bhentai\b|\bsex2\b|\bsex\b|\bsexual\b|\becchi\b|\bnsfw\b|\beroge\b|\bxxx\b|\br18\b|18\+|\bnude\b|\bnudity\b|\buncensored\b/;
     if (ADULT_KEYWORD_RE.test(name)) return true;
     return false;
   } catch (e) { return false; }
@@ -1277,9 +1279,7 @@ function refreshCatalog() {
       const { data, genres } = _buildCatalog(list);
       if (!data.length) throw new Error('upstream returned an empty catalog');
       _applyCatalog(data, genres, Date.now());
-      try {
-        fs.writeFileSync(CATALOG_CACHE_FILE, JSON.stringify({ data, genres, fetchedAt: gamesCache.fetchedAt }));
-      } catch (e) { /* disk cache is best-effort */ }
+      fs.writeFile(CATALOG_CACHE_FILE, JSON.stringify({ data, genres, fetchedAt: gamesCache.fetchedAt }), () => {});
       return gamesCache.data;
     } finally {
       gamesCache.pending = null;
