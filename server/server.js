@@ -1988,7 +1988,7 @@ async function fetchAppDetails(appid) {
       const developers = Array.isArray(d.developers) ? d.developers.join(', ') : (d.developers || '');
       const publishers = Array.isArray(d.publishers) ? d.publishers.join(', ') : (d.publishers || '');
       const releaseDate = (d.release_date && d.release_date.date) || '';
-      const description = d.detailed_description || d.about_the_game || d.short_description || '';
+      const description = d.about_the_game || d.detailed_description || d.short_description || '';
       const movies = Array.isArray(d.movies) ? d.movies.map((m) => ({
         name: m.name || '',
         thumbnail: m.thumbnail || '',
@@ -2000,13 +2000,14 @@ async function fetchAppDetails(appid) {
         cover: d.header_image || '', capsule: d.capsule_image || '', screenshots, movies,
         genres, genre: genres[0] || '',
         developers, publishers, releaseDate, description,
+        about_the_game: d.about_the_game || d.detailed_description || d.short_description || '',
         requiredAge: parseInt(d.required_age, 10) || 0, isFree: !!d.is_free,
         recommendations: (d.recommendations && d.recommendations.total) || 0,
         metacritic: (d.metacritic && d.metacritic.score) || 0,
       };
     }
   } catch (e) { /* ignore */ }
-  return { cover: '', capsule: '', screenshots: [], movies: [], genres: [], genre: '', developers: '', publishers: '', releaseDate: '', description: '', requiredAge: 0, isFree: false, recommendations: 0, metacritic: 0 };
+  return { cover: '', capsule: '', screenshots: [], movies: [], genres: [], genre: '', developers: '', publishers: '', releaseDate: '', description: '', about_the_game: '', requiredAge: 0, isFree: false, recommendations: 0, metacritic: 0 };
 }
 
 async function fetchReviewScore(appid) {
@@ -2046,14 +2047,20 @@ function computeRating(rv, det) {
 app.get('/api/gameinfo/:appid', async (req, res) => {
   const appid = String(req.params.appid || '').replace(/\D/g, '');
   if (!appid) return res.status(400).json({ error: 'appid required' });
-  if (_infoCache.has(appid)) return res.json(_infoCache.get(appid));
+  if (_infoCache.has(appid)) {
+    const cached = _infoCache.get(appid);
+    if (cached && (cached.about_the_game || cached.description)) {
+      return res.json(cached);
+    }
+    _infoCache.delete(appid);
+  }
 
   if (_infoPending.has(appid)) {
     try {
       const out = await _infoPending.get(appid);
       return res.json(out);
     } catch {
-      return res.json({ appid, genre: '', genres: [], developers: '', publishers: '', releaseDate: '', description: '', required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], movies: [], rating: { score: null, label: '', cls: '', count: '' } });
+      return res.json({ appid, genre: '', genres: [], developers: '', publishers: '', releaseDate: '', description: '', about_the_game: '', required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], movies: [], rating: { score: null, label: '', cls: '', count: '' } });
     }
   }
 
@@ -2064,6 +2071,7 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
       genre: det.genre, genres: det.genres,
       developers: det.developers, publishers: det.publishers,
       releaseDate: det.releaseDate, description: det.description,
+      about_the_game: det.about_the_game || det.description || '',
       required_age: det.requiredAge, is_free: det.isFree, adult: det.requiredAge >= 18,
       cover: det.cover, capsule: det.capsule, screenshots: det.screenshots, movies: det.movies,
       rating: computeRating(rv, det),
@@ -2080,7 +2088,7 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
     const out = await p;
     res.json(out);
   } catch (err) {
-    res.json({ appid, genre: '', genres: [], developers: '', publishers: '', releaseDate: '', description: '', required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], movies: [], rating: { score: null, label: '', cls: '', count: '' } });
+    res.json({ appid, genre: '', genres: [], developers: '', publishers: '', releaseDate: '', description: '', about_the_game: '', required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], movies: [], rating: { score: null, label: '', cls: '', count: '' } });
   } finally {
     _infoPending.delete(appid);
   }

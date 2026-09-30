@@ -742,7 +742,7 @@ async function openGameModal(g) {
 
     devEl.textContent = (info.developers && info.developers.length) ? info.developers.join(', ') : '—';
     relEl.textContent = info.releaseDate || '—';
-    descEl.innerHTML = info.description || 'No detailed description available for this title.';
+    descEl.innerHTML = info.about_the_game || info.description || 'No detailed description available for this title.';
 
     if (info.movies && info.movies.length > 0) {
       const m = info.movies[0];
