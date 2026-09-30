@@ -123,6 +123,13 @@ a{color:var(--blue);text-decoration:none}
   border-radius:12px;border:1px solid var(--line2);background:rgba(0,0,0,.5);color:#fff;
   font-family:ui-monospace,monospace;margin:16px auto 8px;outline:none}
 .pin-input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.25)}
+.lightbox-card{position:relative;width:min(1100px,94vw);max-height:90vh;display:flex;align-items:center;justify-content:center;
+  background:rgba(7,13,20,.95);border:1px solid var(--line2);border-radius:18px;overflow:hidden;
+  box-shadow:0 30px 100px rgba(0,0,0,.9),0 0 0 1px rgba(102,192,244,.25);padding:14px}
+.lightbox-card img{width:100%;max-height:82vh;object-fit:contain;border-radius:12px;display:block}
+.lightbox-counter{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.82);border:1px solid var(--line);padding:5px 16px;border-radius:20px;
+  font-size:12px;font-weight:700;color:var(--text);letter-spacing:1px}
 
 /* ── layout ──────────────────────────────────────────────────────── */
 .wrap{max-width:1120px;margin:0 auto;padding:26px 18px 70px;position:relative;z-index:1}
@@ -465,6 +472,17 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
     </div>
   </div>
 
+  <!-- Full-Screen Screenshot Lightbox Modal -->
+  <div id="lightbox-modal" class="modal-overlay" aria-hidden="true" style="z-index:10000">
+    <div class="lightbox-card">
+      <button class="modal-close" id="lightbox-close-btn" title="Close">&times;</button>
+      <button class="slider-btn prev" id="lightbox-prev-btn" title="Previous screenshot" style="left:14px;width:44px;height:44px;font-size:24px">‹</button>
+      <img id="lightbox-img" src="" alt="Screenshot Large View">
+      <button class="slider-btn next" id="lightbox-next-btn" title="Next screenshot" style="right:14px;width:44px;height:44px;font-size:24px">›</button>
+      <div id="lightbox-counter" class="lightbox-counter"></div>
+    </div>
+  </div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 let ME = null;              // { steamid, membership, appids }
@@ -694,10 +712,33 @@ function gameCard(g) {
 }
 
 let currentModalAppid = null;
+let currentScreenshots = [];
+let currentScreenshotIdx = 0;
+
+function openLightbox(index) {
+  if (!currentScreenshots || !currentScreenshots.length) return;
+  currentScreenshotIdx = (index + currentScreenshots.length) % currentScreenshots.length;
+  const url = currentScreenshots[currentScreenshotIdx];
+  const img = $('lightbox-img');
+  const counter = $('lightbox-counter');
+  if (img) img.src = url;
+  if (counter) counter.textContent = (currentScreenshotIdx + 1) + ' / ' + currentScreenshots.length;
+  
+  const banner = $('modal-banner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.innerHTML = `<img src="${esc(url)}" alt="Screenshot">`;
+  }
+  $('lightbox-modal').classList.add('active');
+}
+
+function closeLightbox() {
+  $('lightbox-modal').classList.remove('active');
+}
 
 function setBannerCover(bannerEl, appid, preferredUrl) {
   if (!bannerEl) return;
-  bannerEl.style.display = '';
+  bannerEl.style.display = 'block';
   const sources = [];
   if (preferredUrl) sources.push(preferredUrl);
   sources.push(
@@ -725,6 +766,8 @@ function setBannerCover(bannerEl, appid, preferredUrl) {
 
 async function openGameModal(g) {
   currentModalAppid = String(g.appid);
+  currentScreenshots = [];
+  currentScreenshotIdx = 0;
   const modal = $('game-modal');
   const banner = $('modal-banner');
   const title = $('modal-title');
@@ -796,25 +839,28 @@ async function openGameModal(g) {
       const m = info.movies[0];
       const videoSrc = (m.mp4 && (m.mp4['max'] || m.mp4['480'])) || (m.webm && (m.webm['max'] || m.webm['480'])) || (typeof m.mp4 === 'string' ? m.mp4 : '') || (typeof m.webm === 'string' ? m.webm : '');
       if (videoSrc && (videoSrc.endsWith('.mp4') || videoSrc.endsWith('.webm') || videoSrc.includes('.mp4?') || videoSrc.includes('.webm?'))) {
+        banner.style.display = 'block';
         banner.innerHTML = `<video class="modal-trailer" controls autoplay muted loop poster="${m.thumbnail || (info.cover || '')}"><source src="${esc(videoSrc)}"></video>`;
         hasVideo = true;
       }
     }
-    if (!hasVideo && info.cover) {
-      const imgEl = banner.querySelector('img');
-      if (imgEl) { imgEl.src = info.cover; }
-      else { setBannerCover(banner, g.appid, info.cover); }
+    const mainCover = info.cover || (info.screenshots && info.screenshots.length ? info.screenshots[0] : null);
+    if (!hasVideo && mainCover) {
+      banner.style.display = 'block';
+      banner.innerHTML = `<img src="${esc(mainCover)}" alt="Cover">`;
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
+      currentScreenshots = info.screenshots;
       shotsSec.classList.remove('hide');
       shotsGrid.innerHTML = info.screenshots.map((s, idx) => 
-        `<div class="modal-shot-thumb" data-full="${esc(s)}"><img src="${esc(s)}" alt="Screenshot ${idx+1}"></div>`
+        `<div class="modal-shot-thumb" data-index="${idx}"><img src="${esc(s)}" alt="Screenshot ${idx+1}"></div>`
       ).join('');
 
       shotsGrid.querySelectorAll('.modal-shot-thumb').forEach(thumb => {
         thumb.addEventListener('click', () => {
-          banner.innerHTML = `<img src="${thumb.dataset.full}" alt="Screenshot">`;
+          const idx = parseInt(thumb.dataset.index, 10) || 0;
+          openLightbox(idx);
         });
       });
 
@@ -1089,10 +1135,23 @@ async function init() {
   $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitPin(); });
   $('pin-modal').addEventListener('click', (e) => { if (e.target === $('pin-modal')) closePinModal(false); });
 
+  // Lightbox event bindings
+  $('lightbox-close-btn').addEventListener('click', closeLightbox);
+  $('lightbox-prev-btn').addEventListener('click', () => openLightbox(currentScreenshotIdx - 1));
+  $('lightbox-next-btn').addEventListener('click', () => openLightbox(currentScreenshotIdx + 1));
+  $('lightbox-modal').addEventListener('click', (e) => { if (e.target === $('lightbox-modal')) closeLightbox(); });
+
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      closeModal();
-      closePinModal(false);
+      if ($('lightbox-modal').classList.contains('active')) {
+        closeLightbox();
+      } else {
+        closeModal();
+        closePinModal(false);
+      }
+    } else if ($('lightbox-modal').classList.contains('active')) {
+      if (e.key === 'ArrowLeft') openLightbox(currentScreenshotIdx - 1);
+      if (e.key === 'ArrowRight') openLightbox(currentScreenshotIdx + 1);
     }
   });
 
