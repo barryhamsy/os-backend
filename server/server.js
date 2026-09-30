@@ -1165,7 +1165,7 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
 // ==========================================
 
 const GAMES_API_URL = process.env.GAMES_API_URL || 'https://steamunlockonennabe.duckdns.org/api/onennabe';
-const GAMES_CACHE_MS = 10 * 60 * 1000;
+const GAMES_CACHE_MS = 60 * 60 * 1000; // 1 hour TTL for game catalog cache
 let gamesCache = { data: null, byId: null, genres: [], fetchedAt: 0, pending: null };
 const _yesFlag = (v) => v === true || v === 'Yes' || v === 'yes' || v === '1' || v === 1;
 
@@ -1281,7 +1281,7 @@ function _applyCatalog(data, genres, fetchedAt) {
     if (fs.existsSync(CATALOG_CACHE_FILE)) {
       const saved = JSON.parse(fs.readFileSync(CATALOG_CACHE_FILE, 'utf8'));
       if (saved && Array.isArray(saved.data) && saved.data.length) {
-        _applyCatalog(saved.data, saved.genres || [], saved.fetchedAt || 0);
+        _applyCatalog(saved.data, saved.genres || [], saved.fetchedAt || Date.now());
         console.log(`[Game Catalog] Seeded ${saved.data.length} games from disk cache`);
       }
     }
