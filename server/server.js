@@ -848,7 +848,7 @@ const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duck
 // membership lookup was timing out (→ "NO MEMBERSHIP" / 502). Fetch at most once
 // per few minutes, dedupe concurrent misses, and serve the last good copy if the
 // upstream is slow or down so lookups keep working.
-const KEYLIST_CACHE_MS = 3 * 60 * 1000;
+const KEYLIST_CACHE_MS = 10 * 60 * 1000;
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
 async function getKeyList() {
   const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
@@ -856,7 +856,7 @@ async function getKeyList() {
   if (keyListCache.pending) return keyListCache.pending;
   keyListCache.pending = (async () => {
     try {
-      const vr = await fetchT(SU_VIEW_URL, {}, 20000);
+      const vr = await fetchT(SU_VIEW_URL, {}, 30000);
       const data = await vr.json().catch(() => null);
       const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
       if (!keys) throw new Error('bad key-list payload');
