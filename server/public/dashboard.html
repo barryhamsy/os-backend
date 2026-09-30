@@ -737,10 +737,10 @@ async function openGameModal(g) {
     if (currentModalAppid !== g.appid) return;
 
     if (info.size) sizeEl.textContent = info.size;
-    if (info.genres && info.genres.length) genreEl.textContent = info.genres.join(', ');
+    if (Array.isArray(info.genres) && info.genres.length) genreEl.textContent = info.genres.join(', ');
     else if (info.genre) genreEl.textContent = info.genre;
 
-    devEl.textContent = (info.developers && info.developers.length) ? info.developers.join(', ') : '—';
+    devEl.textContent = Array.isArray(info.developers) ? info.developers.join(', ') : (info.developers || '—');
     relEl.textContent = info.releaseDate || '—';
     descEl.innerHTML = info.about_the_game || info.description || 'No detailed description available for this title.';
 

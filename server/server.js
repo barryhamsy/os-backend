@@ -1973,7 +1973,7 @@ async function fetchAppDetails(appid) {
   try {
     const r = await fetchT(
       `https://store.steampowered.com/api/appdetails?appids=${appid}&l=en&cc=my`,
-      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 4000);
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 8000);
     const data = await r.json().catch(() => null);
     let node = data && data[appid];
     if (!(node && node.success && node.data) && data) {
