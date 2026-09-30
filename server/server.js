@@ -1780,16 +1780,44 @@ async function suLookup(sid64) {
   return { found: false };
 }
 
+// ── Steam Profile Cache ───────────────────────────────────────────────────────
+const _steamProfileCache = new Map();
+async function fetchSteamProfile(sid) {
+  if (_steamProfileCache.has(sid)) return _steamProfileCache.get(sid);
+  try {
+    const r = await fetchT(`https://steamcommunity.com/profiles/${sid}?xml=1`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    }, 4000);
+    const text = await r.text();
+    const nameMatch = text.match(/<steamID>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/steamID>/s);
+    const avatarMatch = text.match(/<avatarMedium>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/avatarMedium>/s);
+    const persona = (nameMatch && nameMatch[1]) ? nameMatch[1].trim() : '';
+    const avatar = (avatarMatch && avatarMatch[1]) ? avatarMatch[1].trim() : '';
+    const out = { personaName: persona || sid, avatar: avatar || '' };
+    if (persona) _steamProfileCache.set(sid, out);
+    return out;
+  } catch (e) {
+    return { personaName: sid, avatar: '' };
+  }
+}
+
 // ── Dashboard API (session-authenticated) ─────────────────────────────────────
-// Who am I + membership + my unlocked games.
+// Who am I + membership + my unlocked games + persona name & avatar.
 app.get('/dash/api/me', requireSteam, async (req, res) => {
   try {
     const sid = toSteamId64(req.steamid);
-    const [mem, appids] = await Promise.all([
+    const [mem, appids, profile] = await Promise.all([
       suLookup(sid).catch(() => ({ found: false })),
       readUsersJsonAppids(sid).catch(() => []),
+      fetchSteamProfile(sid).catch(() => ({ personaName: sid, avatar: '' })),
     ]);
-    res.json({ steamid: sid, membership: mem, appids: appids.map(Number) });
+    res.json({
+      steamid: sid,
+      personaName: profile.personaName,
+      avatar: profile.avatar,
+      membership: mem,
+      appids: appids.map(Number),
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1805,12 +1833,19 @@ app.post('/dash/api/activate', requireSteam, async (req, res) => {
   } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server' }); }
 });
 
+// Canonical Steam Store Genres (Single Source of Truth)
+const STEAM_CANONICAL_GENRES = [
+  "Action", "Adventure", "Casual", "Early Access", "Free to Play",
+  "Indie", "Massively Multiplayer", "Racing", "RPG", "Simulation",
+  "Sports", "Strategy", "Utilities"
+];
+
 // Search + paginate the onennabe catalog (name / appid). Returns cover art plus
 // the total match count and page metadata for the grid.
 app.get('/dash/api/games', requireSteam, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().toLowerCase();
-    const genre = String(req.query.genre || '').trim();       // genre id, '' = any
+    const genre = String(req.query.genre || '').trim();       // genre name/id, '' = any
     const size = String(req.query.size || '').trim();         // bucket key, '' = any
     const scope = String(req.query.scope || 'all').trim();    // 'all' | 'unlocked'
     const showAdult = String(req.query.adult || '') === '1';  // parental control off?
@@ -1818,7 +1853,23 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     const fOnline = String(req.query.online || '') === '1';
     const fBypass = String(req.query.bypass || '') === '1';
     const fHyper  = String(req.query.hypervisor || '') === '1';
-    const games = await getGameCatalog();
+    const rawGames = await getGameCatalog();
+
+    // Enrich catalog games with real Steam info from cache if available
+    const games = rawGames.map(g => {
+      const cached = _infoCache.get(g.appid);
+      const steamGenres = (cached && Array.isArray(cached.genres) && cached.genres.length)
+        ? cached.genres
+        : (g.genres || (g.genreName ? [g.genreName] : []));
+      const genreName = steamGenres.length ? steamGenres.slice(0, 3).join(', ') : (g.genreName || '');
+      return {
+        ...g,
+        genres: steamGenres,
+        genreName: genreName,
+        developers: cached ? (cached.developers || '') : '',
+        releaseDate: cached ? (cached.releaseDate || '') : '',
+      };
+    });
 
     // Parental control: hide 18+ titles unless explicitly allowed.
     let pool = showAdult ? games : games.filter((g) => !g.adult);
@@ -1836,7 +1887,14 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
         ? matches.filter((g) => g.appid.includes(q))
         : matches.filter((g) => g.name.toLowerCase().includes(q));
     }
-    if (genre) matches = matches.filter((g) => g.genre === genre);
+    if (genre) {
+      matches = matches.filter((g) => {
+        if (Array.isArray(g.genres) && g.genres.some(s => s.toLowerCase() === genre.toLowerCase())) return true;
+        if (g.genreName && g.genreName.toLowerCase().includes(genre.toLowerCase())) return true;
+        if (g.genre && String(g.genre).toLowerCase() === genre.toLowerCase()) return true;
+        return false;
+      });
+    }
     if (size) matches = matches.filter((g) => g.sizeBucket === size);
     if (fOnline) matches = matches.filter((g) => g.online_supported);
     if (fBypass) matches = matches.filter((g) => g.bypass_supported);
@@ -1848,15 +1906,8 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     const page = Math.min(Math.max(parseInt(req.query.page, 10) || 1, 1), pages);
     const slice = matches.slice((page - 1) * pageSize, page * pageSize);
 
-    // Genre facet: the distinct genres present in the current pool (so "My games"
-    // shows only genres you own). Sorted by name.
-    let genres = gamesCache.genres || [];
-    if (scope === 'unlocked') {
-      const genreSet = new Map();
-      for (const g of pool) if (g.genre) genreSet.set(g.genre, g.genreName);
-      genres = [...genreSet.entries()].map(([id, name]) => ({ id, name }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    }
+    // Single source of truth for genres dropdown: real Steam Store Genres
+    const genres = STEAM_CANONICAL_GENRES.map(name => ({ id: name, name }));
 
     res.json({
       total, page, pages, pageSize, catalogTotal: games.length, scopeTotal: pool.length,
@@ -1865,7 +1916,10 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
         appid: g.appid,
         name: g.name,
         genre: g.genre,
+        genres: g.genres,
         genreName: g.genreName,
+        developers: g.developers,
+        releaseDate: g.releaseDate,
         size_gb: g.size_gb,
         sizeGB: g.sizeGB,
         adult: g.adult,
@@ -1878,14 +1932,7 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
   } catch (e) { res.status(502).json({ error: 'Catalog unavailable' }); }
 });
 
-// Per-game live info for the card — mirrors the desktop app exactly:
-//   • cover + genre + age  ← Steam appdetails (region cc=my, alias-tolerant),
-//     preferring header_image/screenshots so the cover is always correct.
-//   • rating               ← api.steamcmd.net (common.review_score + %positive),
-//     the same source the desktop uses; falls back to appdetails
-//     recommendations/metacritic when a game has no review score yet.
-// Cached per appid; all upstreams best-effort with timeouts.
-// Cached per appid; all upstreams best-effort with timeouts + disk persistence.
+// Per-game live info for the card & modal popup — mirrors the desktop app:
 const GAME_INFO_CACHE_FILE = path.join(__dirname, 'game_info_cache.json');
 const _infoCache = new Map();
 const _infoPending = new Map();
@@ -1925,11 +1972,9 @@ const REVIEW_LABELS = { 9: 'Overwhelmingly Positive', 8: 'Very Positive', 7: 'Po
 async function fetchAppDetails(appid) {
   try {
     const r = await fetchT(
-      `https://store.steampowered.com/api/appdetails?appids=${appid}&l=en&cc=my&filters=basic,genres,screenshots,recommendations,metacritic`,
-      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 3000);
+      `https://store.steampowered.com/api/appdetails?appids=${appid}&l=en&cc=my`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 4000);
     const data = await r.json().catch(() => null);
-    // Steam sometimes files the reply under a regional alias appid — match by
-    // data.steam_appid, exactly like the desktop's _ss_pick_entry.
     let node = data && data[appid];
     if (!(node && node.success && node.data) && data) {
       for (const v of Object.values(data)) {
@@ -1939,17 +1984,29 @@ async function fetchAppDetails(appid) {
     if (node && node.success && node.data) {
       const d = node.data;
       const genres = Array.isArray(d.genres) ? d.genres.map((x) => x && x.description).filter(Boolean) : [];
-      const screenshots = Array.isArray(d.screenshots) ? d.screenshots.slice(0, 4).map((s) => s.path_full || s.path_thumbnail).filter(Boolean) : [];
+      const screenshots = Array.isArray(d.screenshots) ? d.screenshots.map((s) => s.path_full || s.path_thumbnail).filter(Boolean) : [];
+      const developers = Array.isArray(d.developers) ? d.developers.join(', ') : (d.developers || '');
+      const publishers = Array.isArray(d.publishers) ? d.publishers.join(', ') : (d.publishers || '');
+      const releaseDate = (d.release_date && d.release_date.date) || '';
+      const description = d.detailed_description || d.about_the_game || d.short_description || '';
+      const movies = Array.isArray(d.movies) ? d.movies.map((m) => ({
+        name: m.name || '',
+        thumbnail: m.thumbnail || '',
+        webm: (m.webm && (m.webm.max || m.webm[480])) || '',
+        mp4: (m.mp4 && (m.mp4.max || m.mp4[480])) || ''
+      })).filter(m => m.webm || m.mp4) : [];
+
       return {
-        cover: d.header_image || '', capsule: d.capsule_image || '', screenshots,
+        cover: d.header_image || '', capsule: d.capsule_image || '', screenshots, movies,
         genres, genre: genres[0] || '',
+        developers, publishers, releaseDate, description,
         requiredAge: parseInt(d.required_age, 10) || 0, isFree: !!d.is_free,
         recommendations: (d.recommendations && d.recommendations.total) || 0,
         metacritic: (d.metacritic && d.metacritic.score) || 0,
       };
     }
   } catch (e) { /* ignore */ }
-  return { cover: '', capsule: '', screenshots: [], genres: [], genre: '', requiredAge: 0, isFree: false, recommendations: 0, metacritic: 0 };
+  return { cover: '', capsule: '', screenshots: [], movies: [], genres: [], genre: '', developers: '', publishers: '', releaseDate: '', description: '', requiredAge: 0, isFree: false, recommendations: 0, metacritic: 0 };
 }
 
 async function fetchReviewScore(appid) {
@@ -1996,7 +2053,7 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
       const out = await _infoPending.get(appid);
       return res.json(out);
     } catch {
-      return res.json({ appid, genre: '', genres: [], required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], rating: { score: null, label: '', cls: '', count: '' } });
+      return res.json({ appid, genre: '', genres: [], developers: '', publishers: '', releaseDate: '', description: '', required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], movies: [], rating: { score: null, label: '', cls: '', count: '' } });
     }
   }
 
@@ -2005,8 +2062,10 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
     const out = {
       appid,
       genre: det.genre, genres: det.genres,
+      developers: det.developers, publishers: det.publishers,
+      releaseDate: det.releaseDate, description: det.description,
       required_age: det.requiredAge, is_free: det.isFree, adult: det.requiredAge >= 18,
-      cover: det.cover, capsule: det.capsule, screenshots: det.screenshots,
+      cover: det.cover, capsule: det.capsule, screenshots: det.screenshots, movies: det.movies,
       rating: computeRating(rv, det),
     };
     if (det.cover || (det.genres && det.genres.length) || (rv.score != null && rv.score >= 1) || det.recommendations > 0) {
@@ -2021,7 +2080,7 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
     const out = await p;
     res.json(out);
   } catch (err) {
-    res.json({ appid, genre: '', genres: [], required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], rating: { score: null, label: '', cls: '', count: '' } });
+    res.json({ appid, genre: '', genres: [], developers: '', publishers: '', releaseDate: '', description: '', required_age: 0, is_free: false, adult: false, cover: '', capsule: '', screenshots: [], movies: [], rating: { score: null, label: '', cls: '', count: '' } });
   } finally {
     _infoPending.delete(appid);
   }
