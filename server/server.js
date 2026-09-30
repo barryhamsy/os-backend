@@ -834,7 +834,7 @@ async function suValidate(cd, sid) {
       cd_key: cd, cdkey: cd,
       steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
     }),
-  }, 25000); // key binding is a write — allow much longer than a plain read
+  }, 45000); // key binding is a write — allow up to 45s for slow upstream server
   return await vr.json().catch(() => null);
 }
 
