@@ -877,15 +877,47 @@ async function openGameModal(g) {
     let hasVideo = false;
     if (info.movies && info.movies.length > 0) {
       const m = info.movies[0];
-      const videoSrc = (m.mp4 && (m.mp4['max'] || m.mp4['480'])) || (m.webm && (m.webm['max'] || m.webm['480'])) || (typeof m.mp4 === 'string' ? m.mp4 : '') || (typeof m.webm === 'string' ? m.webm : '');
+      let videoSrc = (m.mp4 && (m.mp4['max'] || m.mp4['480'])) || (m.webm && (m.webm['max'] || m.webm['480'])) || (typeof m.mp4 === 'string' ? m.mp4 : '') || (typeof m.webm === 'string' ? m.webm : '');
       if (videoSrc && (videoSrc.endsWith('.mp4') || videoSrc.endsWith('.webm') || videoSrc.includes('.mp4?') || videoSrc.includes('.webm?'))) {
+        if (videoSrc.startsWith('http://')) videoSrc = videoSrc.replace('http://', 'https://');
+        
+        const v = document.createElement('video');
+        v.className = 'modal-trailer';
+        v.controls = true;
+        v.autoplay = true;
+        v.muted = true;
+        v.loop = true;
+        if (m.thumbnail) v.poster = m.thumbnail;
+
+        let videoFailed = false;
+        const handleVideoError = () => {
+          if (videoFailed) return;
+          videoFailed = true;
+          if (String(currentModalAppid) === String(g.appid)) {
+            setBannerCover(banner, g.appid, info.cover || initialCover);
+          }
+        };
+
+        v.onerror = handleVideoError;
+        const source = document.createElement('source');
+        source.src = videoSrc;
+        source.onerror = handleVideoError;
+        v.appendChild(source);
+
         banner.style.display = 'block';
-        banner.innerHTML = `<video class="modal-trailer" controls autoplay muted loop poster="${m.thumbnail || (info.cover || '')}"><source src="${esc(videoSrc)}"></video>`;
+        banner.innerHTML = '';
+        banner.appendChild(v);
         hasVideo = true;
+
+        setTimeout(() => {
+          if (v.readyState === 0 && !videoFailed) {
+            handleVideoError();
+          }
+        }, 3500);
       }
     }
-    if (!hasVideo && info.cover) {
-      setBannerCover(banner, g.appid, info.cover);
+    if (!hasVideo) {
+      setBannerCover(banner, g.appid, info.cover || initialCover);
     }
 
     if (info.screenshots && info.screenshots.length > 0) {
