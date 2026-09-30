@@ -1989,12 +1989,17 @@ async function fetchAppDetails(appid) {
       const publishers = Array.isArray(d.publishers) ? d.publishers.join(', ') : (d.publishers || '');
       const releaseDate = (d.release_date && d.release_date.date) || '';
       const description = d.about_the_game || d.detailed_description || d.short_description || '';
-      const movies = Array.isArray(d.movies) ? d.movies.map((m) => ({
-        name: m.name || '',
-        thumbnail: m.thumbnail || '',
-        webm: (m.webm && (m.webm.max || m.webm[480])) || '',
-        mp4: (m.mp4 && (m.mp4.max || m.mp4[480])) || ''
-      })).filter(m => m.webm || m.mp4) : [];
+      const movies = Array.isArray(d.movies) ? d.movies.map((m) => {
+        const webm = (m.webm && (m.webm.max || m.webm[480])) || (typeof m.webm === 'string' ? m.webm : '');
+        const mp4 = (m.mp4 && (m.mp4.max || m.mp4[480])) || (typeof m.mp4 === 'string' ? m.mp4 : '');
+        const hls = m.hls_h264 || m.hls || '';
+        const dash = m.dash_h264 || m.dash || '';
+        return {
+          name: m.name || '',
+          thumbnail: m.thumbnail || '',
+          webm, mp4, hls, dash
+        };
+      }).filter(m => m.webm || m.mp4 || m.hls || m.dash) : [];
 
       return {
         cover: d.header_image || '', capsule: d.capsule_image || '', screenshots, movies,
@@ -2049,7 +2054,7 @@ app.get('/api/gameinfo/:appid', async (req, res) => {
   if (!appid) return res.status(400).json({ error: 'appid required' });
   if (_infoCache.has(appid)) {
     const cached = _infoCache.get(appid);
-    if (cached && (cached.about_the_game || cached.description)) {
+    if (cached && cached.cover && (cached.about_the_game || cached.description)) {
       return res.json(cached);
     }
     _infoCache.delete(appid);
