@@ -79,9 +79,10 @@ a{color:var(--blue);text-decoration:none}
   transform:translateY(20px) scale(.97);transition:transform .25s cubic-bezier(.16,1,.3,1);
   display:flex;flex-direction:column}
 .modal-overlay.active .modal-card{transform:translateY(0) scale(1)}
-.modal-close{position:absolute;top:16px;right:16px;width:36px;height:36px;border-radius:50%;
-  background:rgba(0,0,0,.6);border:1px solid var(--line2);color:#fff;font-size:20px;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:10;transition:.15s}
+.modal-close{position:absolute;top:14px;right:14px;width:36px;height:36px;border-radius:50%;
+  background:rgba(0,0,0,.75);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border:1px solid var(--line2);color:#fff;font-size:20px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:20;transition:.15s}
 .modal-close:hover{background:rgba(255,107,107,.35);border-color:var(--red)}
 .modal-banner{width:100%;aspect-ratio:16/7;position:relative;background:#070d14;
   overflow:hidden;border-bottom:1px solid var(--line)}
@@ -421,7 +422,7 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
             <img id="modal-cover-img" class="modal-cover-img" src="" alt="Game Cover">
           </div>
           <div style="flex:1;min-width:0">
-            <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+            <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;padding-right:42px">
               <div style="flex:1;min-width:0">
                 <h2 id="modal-title" class="modal-title"></h2>
                 <div id="modal-appid" class="mono muted" style="font-size:12px;margin-top:4px"></div>
