@@ -54,28 +54,6 @@ async function dbRemoveUnlock(sid, appid) {
   await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [String(sid), String(appid)]);
 }
 
-const STEAM64_BASE = 76561197960265728n;
-function toSteamId64(id) {
-  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
-  catch { return String(id); }
-}
-
-async function dbClearAllUnlocks(sid) {
-  if (!sid) return;
-  try {
-    const sidStr = String(sid).trim();
-    const sid64 = toSteamId64(sidStr);
-    await db.run('DELETE FROM member_unlocks WHERE steamid = ? OR steamid = ?', [sidStr, sid64]);
-    if (typeof _recentActivationsCache !== 'undefined' && _recentActivationsCache) {
-      _recentActivationsCache.delete(sidStr);
-      _recentActivationsCache.delete(sid64);
-    }
-    console.log(`[member_unlocks] Cleared all appids and records for revoked/expired steamid: ${sidStr} / ${sid64}`);
-  } catch (e) {
-    console.error(`[dbClearAllUnlocks] error clearing records for ${sid}:`, e.message);
-  }
-}
-
 // Debounced, best-effort GitHub backup of a user's unlock list. Coalesces a
 // burst of unlocks into ONE commit so we never hammer GitHub. Never on the hot path.
 // Replace mirrorUserToGitHub with a stub
@@ -812,21 +790,16 @@ async function readUsersJsonAppids(sid64) {
   }
 }
 
+const STEAM64_BASE = 76561197960265728n;
+function toSteamId64(id) {
+  try { const n = BigInt(id); return (n > STEAM64_BASE) ? String(n) : String(n + STEAM64_BASE); }
+  catch { return String(id); }
+}
+
 app.get('/api/entitlements/:steamid', async (req, res) => {
   try {
     let id = String(req.params.steamid).trim();
-    const sid64 = toSteamId64(id);
-
-    // Verify membership: if CD key is revoked or expired, clear records and return empty appids array
-    const mem = await suLookup(sid64).catch(() => ({ found: false }));
-    if (!mem || !mem.found) {
-      await dbClearAllUnlocks(id);
-      await dbClearAllUnlocks(sid64);
-      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-      return res.json({ steamid: id, appids: [] });
-    }
-
-    const candidates = new Set([id, sid64]);
+    const candidates = new Set([id]);
     try {
       const n = BigInt(id);
       if (n > STEAM64_BASE) candidates.add(String(n - STEAM64_BASE)); // 64 -> 32
@@ -838,11 +811,10 @@ app.get('/api/entitlements/:steamid', async (req, res) => {
     for (const c of candidates) {
       for (const a of await computeEntitlements(c)) set.add(String(a));
     }
-    // Membership unlocks (member_unlocks table).
-    for (const a of await readUsersJsonAppids(sid64)) set.add(String(a));
+    // Membership unlocks (users/<steamid64>.json).
+    for (const a of await readUsersJsonAppids(toSteamId64(id))) set.add(String(a));
 
     const appids = [...set].sort((a, b) => Number(a) - Number(b));
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({ steamid: id, appids: appids.map(Number) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -864,17 +836,7 @@ let _manifestEpoch = 0;
 app.get('/api/entitlements-version/:steamid', async (req, res) => {
   try {
     let id = String(req.params.steamid).trim();
-    const sid64 = toSteamId64(id);
-
-    const mem = await suLookup(sid64).catch(() => ({ found: false }));
-    if (!mem || !mem.found) {
-      await dbClearAllUnlocks(id);
-      await dbClearAllUnlocks(sid64);
-      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-      return res.json({ v: `0:0:0:0:${_manifestEpoch}` });
-    }
-
-    const candidates = new Set([id, sid64]);
+    const candidates = new Set([id]);
     try {
       const n = BigInt(id);
       if (n > STEAM64_BASE) candidates.add(String(n - STEAM64_BASE)); // 64 -> 32
@@ -891,11 +853,11 @@ app.get('/api/entitlements-version/:steamid', async (req, res) => {
 
     const mrow = await db.get(
       "SELECT COUNT(*) AS n, COALESCE(MAX(added_at), 0) AS mx FROM member_unlocks WHERE steamid = ?",
-      [String(sid64)]
+      [String(toSteamId64(id))]
     ).catch(() => ({ n: 0, mx: 0 }));
 
     const v = `${krow.n}:${krow.mx}:${mrow.n}:${mrow.mx}:${_manifestEpoch}`;
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Cache-Control', 'no-store');
     res.json({ v });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1233,7 +1195,6 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
     // the customer's still-valid keys also grants them.
     let entitlements = null;
     if (keyRecord.activated_by) {
-      await dbClearAllUnlocks(keyRecord.activated_by);
       entitlements = await syncUserEntitlements(keyRecord.activated_by);
     }
 
@@ -1910,7 +1871,6 @@ async function suLookup(sid64) {
 
     const expiredMatches = matches.filter((m) => m.expired);
     if (wasRevoked && revokedKeyData) {
-      await dbClearAllUnlocks(sid64);
       return {
         found: false,
         revoked: true,
@@ -1924,7 +1884,6 @@ async function suLookup(sid64) {
     }
 
     if (expiredMatches.length) {
-      await dbClearAllUnlocks(sid64);
       const m = expiredMatches.sort(suKeyCompare)[0];
       return {
         found: false,
@@ -1938,7 +1897,6 @@ async function suLookup(sid64) {
       };
     }
 
-    await dbClearAllUnlocks(sid64);
     return { found: false, message: 'No Steam Unlock membership found for this Steam account.' };
   } catch (e) {
     return { found: false, error: e.message };
