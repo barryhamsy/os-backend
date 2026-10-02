@@ -282,13 +282,6 @@ app.get('/api/onegamers/files', (req, res) => {
 
 app.use('/onegamers', express.static(onegamersDir));
 app.use('/onegamers', express.static(path.join(__dirname, 'public')));
-
-// Explicit page routes for navbar pages
-app.get('/tools', (req, res) => res.sendFile(path.join(__dirname, 'public', 'tools.html')));
-app.get('/partnership', (req, res) => res.sendFile(path.join(__dirname, 'public', 'partnership.html')));
-app.get('/about', (req, res) => res.sendFile(path.join(__dirname, 'public', 'about.html')));
-app.get('/donate', (req, res) => res.sendFile(path.join(__dirname, 'public', 'donate.html')));
-
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Helper: Generate Alphanumeric CDKey format OST-XXXX-YYYY-ZZZZ
