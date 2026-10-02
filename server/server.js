@@ -898,50 +898,24 @@ app.post('/api/github/webhook', (req, res) => {
 // are GET endpoints and os-backend does the proper server-to-server POST.
 const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonennabe.duckdns.org/validate-onennabe-cdkey';
 
-// Cache recently activated keys per SteamID to bridge any propagation delay in SU_VIEW_URL
-const _recentActivationsCache = new Map();
-
 // Server-to-server: ask steamunlockonennabe whether a CD key is valid. It needs
 // both the CD key and the SteamID; we send field-name aliases so it matches
 // whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
 async function suValidate(cd, sid) {
   const sid64 = sid ? toSteamId64(String(sid)) : '';
-  const cleanCd = String(cd || '').trim();
-  try {
-    const vr = await fetchT(SU_VALIDATE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OST-Server/1.0',
-        'Accept': 'application/json, text/plain, */*'
-      },
-      body: JSON.stringify({
-        cd_key: cleanCd,
-        steamid: sid64,
-      }),
-    }, 25000); // 25s timeout for upstream server
-    const text = await vr.text().catch(() => '');
-    let res = null;
-    try { res = JSON.parse(text); } catch (_) {
-      if (text && (text.toLowerCase().includes('success') || text.toLowerCase().includes('activated'))) {
-        res = { status: 'success', message: 'CD Key validated successfully' };
-      }
-    }
-    if (res && typeof res === 'object') {
-      const isOk = res.status === 'success' || res.status === 'Activated' || res.activated || (res.message && /validated|activated|success/i.test(res.message));
-      if (isOk) {
-        keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
-      }
-      return res;
-    }
-    if (!vr.ok) {
-      return { status: 'error', message: `Validation server returned HTTP ${vr.status}` };
-    }
-    return { status: 'error', message: (text ? text.slice(0, 120) : 'Validation server returned invalid response') };
-  } catch (err) {
-    console.error(`[suValidate] error validating ${cleanCd} for ${sid64}:`, err.message);
-    return { status: 'error', message: 'Could not reach key validation server (' + err.message + ')' };
+  const vr = await fetchT(SU_VALIDATE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cd_key: cd, cdkey: cd,
+      steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
+    }),
+  }, 45000); // key binding is a write — allow up to 45s for slow upstream server
+  const res = await vr.json().catch(() => null);
+  if (res && (res.status === 'success' || res.status === 'Activated' || res.activated)) {
+    keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
   }
+  return res;
 }
 
 // Full key list (server-side only). Used to look up an existing user's own key
@@ -951,47 +925,23 @@ const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duck
 
 // Cache the full CD-key list. Served with 30s TTL and fallback to stale copy if upstream is slow.
 const KEYLIST_CACHE_MS = 30 * 1000;
-const KEYLIST_CACHE_FILE = path.join(__dirname, 'key_list_cache.json');
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
-
-// Load disk-seeded key list cache on boot so cold starts never fail
-(function loadKeyListFromDisk() {
-  try {
-    if (fs.existsSync(KEYLIST_CACHE_FILE)) {
-      const saved = JSON.parse(fs.readFileSync(KEYLIST_CACHE_FILE, 'utf8'));
-      if (saved && Array.isArray(saved.keys) && saved.keys.length) {
-        keyListCache.data = saved.keys;
-        keyListCache.fetchedAt = saved.fetchedAt || Date.now();
-        console.log(`[KeyList] Seeded ${saved.keys.length} keys from disk cache`);
-      }
-    }
-  } catch (e) { console.error('[KeyList] disk load failed:', e.message); }
-})();
-
 async function getKeyList() {
   const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
   if (fresh) return keyListCache.data;
   if (keyListCache.pending) return keyListCache.pending;
   keyListCache.pending = (async () => {
     try {
-      const vr = await fetchT(SU_VIEW_URL, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OST-Server/1.0',
-          'Accept': 'application/json, text/plain, */*'
-        }
-      }, 30000);
-      const text = await vr.text().catch(() => '');
-      let data = null;
-      try { data = JSON.parse(text); } catch (_) {}
-      const keys = (data && Array.isArray(data.keys)) ? data.keys : (data && Array.isArray(data) ? data : null);
-      if (!keys || !keys.length) throw new Error('bad key-list payload');
+      const vr = await fetchT(SU_VIEW_URL, {}, 30000);
+      const data = await vr.json().catch(() => null);
+      const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
+      if (!keys) throw new Error('bad key-list payload');
       keyListCache.data = keys;
       keyListCache.fetchedAt = Date.now();
-      fs.writeFile(KEYLIST_CACHE_FILE, JSON.stringify({ keys, fetchedAt: keyListCache.fetchedAt }), () => {});
       return keys;
     } catch (err) {
       if (keyListCache.data) {
-        console.error(`[KeyList] refresh failed, serving cached (${keyListCache.data.length} keys): ${err.message}`);
+        console.error(`[KeyList] refresh failed, serving cached: ${err.message}`);
         return keyListCache.data;
       }
       throw err;
@@ -1034,7 +984,6 @@ function suKeyCompare(a, b) {
 // One-click activation for existing users: finds a key this SteamID has already
 // activated and returns ONLY that user's own key (never anyone else's).
 app.get('/api/su/lookup', async (req, res) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   const sidIn = String(req.query.steamid || '').trim();
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
   const sid64 = toSteamId64(sidIn);
@@ -1841,134 +1790,54 @@ app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/d
 async function suLookup(sid64) {
   if (!sid64) return { found: false };
   try {
-    const sid = String(sid64);
-    const target64 = toSteamId64(sid);
-    const target32 = String(BigInt(target64) - STEAM64_BASE);
-
-    // 1. Check recent activations cache first (valid for 15 minutes)
-    if (_recentActivationsCache.has(target64) || _recentActivationsCache.has(target32)) {
-      const recent = _recentActivationsCache.get(target64) || _recentActivationsCache.get(target32);
-      if (Date.now() - recent.timestamp < 15 * 60 * 1000) {
-        return {
-          found: true,
-          cd_key: recent.cd_key,
-          key_type: recent.key_type || 'STANDARD',
-          activation_date: recent.activation_date,
-          expiry_date: recent.expiry_date || '',
-        };
-      } else {
-        _recentActivationsCache.delete(target64);
-        _recentActivationsCache.delete(target32);
-      }
-    }
-
+    const keys = await getKeyList(); // cached short TTL
     const today = suTodayStr();
     const matches = [];
-
-    // 2. Search active keys in keyList (SU_VIEW_URL)
-    try {
-      const rawKeys = await getKeyList().catch(() => []);
-      const keys = Array.isArray(rawKeys) ? rawKeys : [];
-
-      for (const k of keys) {
-        let ids = [];
-        if (Array.isArray(k.steamids)) {
-          ids = ids.concat(k.steamids);
-        } else if (typeof k.steamids === 'string') {
-          ids = ids.concat(k.steamids.split(',').map((s) => s.trim()));
-        }
-        if (k.steamid) ids.push(k.steamid);
-        if (k.steam_id) ids.push(k.steam_id);
-        if (k.activated_by) ids.push(k.activated_by);
-
-        const mine = ids.find((s) => {
-          const st = String((s && s.steamid) || (s && s.steam_id) || s).trim();
-          return st === target64 || st === target32;
-        });
-        if (!mine) continue;
-        const exp = String(k.expiry_date || '');
-        matches.push({
-          cd_key: k.cd_key || k.cdkey,
-          expiry_date: exp,
-          key_type: k.key_type || 'STANDARD',
-          activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-          expired: exp ? (exp < today) : false,
-        });
-      }
-    } catch (_) {}
-
-    // 3. Search local SQLite DB for activations or used keys
-    try {
-      const localAct = await db.get(`
-        SELECT cdkey, activated_at FROM activations WHERE steamid = ? OR steamid = ? ORDER BY activated_at DESC LIMIT 1
-      `, [target64, target32]);
-      if (localAct) {
-        matches.push({
-          cd_key: localAct.cdkey,
-          expiry_date: '',
-          key_type: 'STANDARD',
-          activation_date: String(localAct.activated_at || '').slice(0, 10),
-          expired: false,
-        });
-      }
-      const localOgAct = await db.get(`
-        SELECT cdkey, activated_at FROM og_activations WHERE steamid = ? OR steamid = ? ORDER BY activated_at DESC LIMIT 1
-      `, [target64, target32]);
-      if (localOgAct) {
-        matches.push({
-          cd_key: localOgAct.cdkey,
-          expiry_date: '',
-          key_type: 'STANDARD',
-          activation_date: String(localOgAct.activated_at || '').slice(0, 10),
-          expired: false,
-        });
-      }
-      const localKey = await db.get(`
-        SELECT cdkey, status, activated_at FROM keys WHERE (activated_by = ? OR activated_by = ?) AND status = 'used' ORDER BY activated_at DESC LIMIT 1
-      `, [target64, target32]);
-      if (localKey) {
-        matches.push({
-          cd_key: localKey.cdkey,
-          expiry_date: '',
-          key_type: 'STANDARD',
-          activation_date: String(localKey.activated_at || '').slice(0, 10),
-          expired: false,
-        });
-      }
-      const localOgKey = await db.get(`
-        SELECT cdkey, status, created_at FROM og_keys WHERE (activated_by = ? OR activated_by = ?) AND status = 'used' ORDER BY created_at DESC LIMIT 1
-      `, [target64, target32]);
-      if (localOgKey) {
-        matches.push({
-          cd_key: localOgKey.cdkey,
-          expiry_date: '',
-          key_type: 'STANDARD',
-          activation_date: String(localOgKey.created_at || '').slice(0, 10),
-          expired: false,
-        });
-      }
-    } catch (_) {}
-
-    const activeCandidates = matches.filter((m) => !m.expired).sort(suKeyCompare);
-    if (activeCandidates.length) {
-      return { found: true, ...activeCandidates[0] };
+    for (const k of keys) {
+      const ids = Array.isArray(k.steamids) ? k.steamids : [];
+      const mine = ids.find((s) => String(s && s.steamid) === String(sid64));
+      if (!mine) continue;
+      const exp = String(k.expiry_date || '');
+      matches.push({
+        cd_key: k.cd_key,
+        expiry_date: exp,
+        key_type: k.key_type || '',
+        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+        expired: exp ? (exp < today) : false,
+      });
     }
 
-    const expiredMatches = matches.filter((m) => m.expired);
-    if (expiredMatches.length) {
-      const m = expiredMatches.sort(suKeyCompare)[0];
+    const activeCandidates = matches.filter((m) => !m.expired).sort(suKeyCompare);
+
+    for (const candidate of activeCandidates) {
+      // Re-validate candidate key against upstream validate-onennabe-cdkey endpoint
+      try {
+        const vd = await suValidate(candidate.cd_key, sid64);
+        if (vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true)) {
+          return { found: true, ...candidate };
+        } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
+          // Key was revoked upstream! Invalidate keyListCache so fresh keys are loaded
+          keyListCache.fetchedAt = 0;
+        }
+      } catch (e) {
+        // Network fallback: if validation fails due to network error, treat key as active
+        return { found: true, ...candidate };
+      }
+    }
+
+    if (matches.length) {
+      const m = matches.slice().sort(suKeyCompare)[0];
       return {
         found: false,
-        expired: true,
-        revoked: false,
+        expired: !matches.some((m) => !m.expired),
+        revoked: true,
         cd_key: m.cd_key,
         key_type: m.key_type,
         activation_date: m.activation_date,
         expiry_date: m.expiry_date,
-        message: 'Your Steam Unlock membership has expired.',
+        message: 'Your Steam Unlock membership has been revoked or expired.',
       };
     }
-
     return { found: false, message: 'No Steam Unlock membership found for this Steam account.' };
   } catch (e) {
     return { found: false, error: e.message };
@@ -2000,7 +1869,6 @@ async function fetchSteamProfile(sid) {
 // Who am I + membership + my unlocked games + persona name & avatar.
 app.get('/dash/api/me', requireSteam, async (req, res) => {
   try {
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const sid = toSteamId64(req.steamid);
     const [mem, appids, profile] = await Promise.all([
       suLookup(sid).catch(() => ({ found: false })),
@@ -2021,71 +1889,12 @@ app.get('/dash/api/me', requireSteam, async (req, res) => {
 app.post('/dash/api/activate', requireSteam, async (req, res) => {
   try {
     const sid = toSteamId64(req.steamid);
-    const cd = String((req.body && (req.body.cd_key || req.body.cdkey || req.body.key)) || '').trim();
+    const cd = String((req.body && req.body.cd_key) || '').trim();
     if (!cd) return res.status(400).json({ status: 'error', message: 'CD key required' });
-
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-    // 1. Check local DB (keys table - reseller/admin keys)
-    const localKey = await db.get('SELECT * FROM keys WHERE cdkey = ?', [cd.toUpperCase()]).catch(() => null);
-    if (localKey) {
-      const result = await handleKeyActivation(cd, sid, ip);
-      if (result.status === 200 && result.data && result.data.success) {
-        _recentActivationsCache.set(sid, {
-          cd_key: cd.toUpperCase(),
-          key_type: 'STANDARD',
-          activation_date: suTodayStr(),
-          expiry_date: '',
-          timestamp: Date.now()
-        });
-        keyListCache.fetchedAt = 0;
-        return res.json({ status: 'success', message: 'CD Key activated successfully!' });
-      } else {
-        return res.json({ status: 'error', message: (result.data && result.data.error) || 'Key activation failed' });
-      }
-    }
-
-    // 2. Check local DB (og_keys table - OneGamers keys)
-    const localOgKey = await db.get('SELECT * FROM og_keys WHERE cdkey = ?', [cd.toUpperCase()]).catch(() => null);
-    if (localOgKey) {
-      if (localOgKey.status === 'used') {
-        return res.json({ status: 'error', message: 'CD Key has already been activated' });
-      }
-      if (localOgKey.status === 'disabled') {
-        return res.json({ status: 'error', message: 'CD Key is disabled' });
-      }
-      await db.run("UPDATE og_keys SET status = 'used', activated_by = ? WHERE id = ?", [sid, localOgKey.id]);
-      await db.run("INSERT INTO og_activations (cdkey, steamid, appid, ip_address) VALUES (?, ?, ?, ?)", [cd.toUpperCase(), sid, localOgKey.appid, ip || '127.0.0.1']);
-      if (localOgKey.appid) await dbAddUnlock(sid, localOgKey.appid);
-      _recentActivationsCache.set(sid, {
-        cd_key: cd.toUpperCase(),
-        key_type: 'STANDARD',
-        activation_date: suTodayStr(),
-        expiry_date: '',
-        timestamp: Date.now()
-      });
-      keyListCache.fetchedAt = 0;
-      return res.json({ status: 'success', message: 'OneGamers CD Key activated successfully!' });
-    }
-
-    // 3. Upstream validation (Steam Unlock API)
     const vd = await suValidate(cd, sid);
     if (!vd) return res.status(502).json({ status: 'error', message: 'Validation server error' });
-
-    const isOk = vd.status === 'success' || vd.status === 'Activated' || vd.activated || (vd.message && /validated|activated|success/i.test(vd.message));
-    if (isOk) {
-      _recentActivationsCache.set(sid, {
-        cd_key: cd,
-        key_type: vd.key_type || vd.type || 'STANDARD',
-        activation_date: suTodayStr(),
-        expiry_date: vd.expiry_date || '',
-        timestamp: Date.now()
-      });
-      keyListCache.fetchedAt = 0;
-    }
-
     return res.json(vd);
-  } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server (' + e.message + ')' }); }
+  } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server' }); }
 });
 
 // Canonical Steam Store Genres (Single Source of Truth)

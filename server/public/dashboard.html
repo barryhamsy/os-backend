@@ -716,10 +716,9 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
     </div>
   </div>
 
-  <!-- Membership Activation Pop-up Modal -->
+  <!-- Mandatory Membership Activation Pop-up Modal -->
   <div id="membership-modal" class="modal-overlay" aria-hidden="true" style="z-index:1000">
-    <div class="modal-card pin-card" style="max-width:460px;padding:32px 28px;text-align:left;position:relative">
-      <button class="modal-close" id="pop-close-btn" title="Close">&times;</button>
+    <div class="modal-card pin-card" style="max-width:460px;padding:32px 28px;text-align:left">
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px">
         <h2 class="h" style="margin:0;font-size:22px">Membership</h2>
         <div id="pop-mempill"></div>
@@ -755,11 +754,7 @@ async function api(path, opts = {}) {
     throw err;
   } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
-  if (r.status >= 500) {
-    const errBody = await r.json().catch(() => null);
-    const msg = (errBody && (errBody.message || errBody.error)) || ('Server error (HTTP ' + r.status + ')');
-    throw new Error(msg);
-  }
+  if (r.status >= 500) throw new Error('http ' + r.status); // 5xx / 504 → caller treats as failure
   return r.json();
 }
 
@@ -791,15 +786,15 @@ function renderMembership() {
     if (popModal) popModal.classList.add('active');
     let pillHtml = '';
     let lineTxt = '';
-    if (mem.revoked) {
-      pillHtml = '<span class="pill pill-off">REVOKED</span>';
-      lineTxt = 'Your CD key has been revoked. Activate a new CD key to keep unlocking.';
-    } else if (mem.expired) {
+    if (mem.expired) {
       pillHtml = '<span class="pill pill-off">EXPIRED</span>';
       lineTxt = 'Your membership has expired. Activate a new CD key to keep unlocking.';
+    } else if (mem.revoked) {
+      pillHtml = '<span class="pill pill-off">REVOKED</span>';
+      lineTxt = 'Your CD key has been revoked. Activate a new CD key to keep unlocking.';
     } else {
       pillHtml = '<span class="pill pill-warn">NO MEMBERSHIP</span>';
-      lineTxt = 'Welcome! Activate a CD key below to start unlocking games.';
+      lineTxt = 'Activate a CD key below to start unlocking games.';
     }
     if (box) box.innerHTML = pillHtml;
     if (line) line.textContent = lineTxt;
@@ -1434,24 +1429,18 @@ async function activateKey(isPop = false) {
   btn.disabled=true; st.style.color='var(--muted)'; st.innerHTML='<span class="spin"></span> Activating…';
   try {
     const r = await api('/dash/api/activate', { method:'POST', body: JSON.stringify({ cd_key: cd }) });
-    const isOk = r && (r.status === 'success' || r.status === 'Activated' || r.activated || (r.message && /validated|activated|success/i.test(r.message)));
-    if (isOk) {
+    if (r.status === 'success' || r.activated) {
       st.style.color='var(--green)'; st.textContent = r.message || 'Activated! Membership is now active.';
       if (cdEl) cdEl.value='';
-      const popModal = $('membership-modal');
-      if (popModal) popModal.classList.remove('active');
+      // Instantly dismiss modal and render active state locally
       if (!ME) ME = {};
-      ME.membership = {
-        found: true,
-        cd_key: cd,
-        key_type: (r && (r.key_type || r.type)) || 'STANDARD',
-        activation_date: new Date().toISOString().slice(0, 10),
-        expiry_date: (r && r.expiry_date) || ''
-      };
+      if (!ME.membership) ME.membership = {};
+      ME.membership.found = true;
+      ME.membership.cd_key = cd;
       renderMembership();
       await refreshMe();
     } else {
-      st.style.color='var(--red)'; st.textContent = (r && r.message) || 'Activation failed.';
+      st.style.color='var(--red)'; st.textContent = r.message || 'Activation failed.';
     }
   } catch(e){ if(e.message!=='unauth'){ st.style.color='var(--red)'; st.textContent='Error: '+e.message; } }
   finally { btn.disabled=false; }
@@ -1585,10 +1574,6 @@ async function init() {
   $('lightbox-next-btn').addEventListener('click', () => openLightbox(currentScreenshotIdx + 1));
   $('lightbox-modal').addEventListener('click', (e) => { if (e.target === $('lightbox-modal')) closeLightbox(); });
 
-  // Membership modal dismiss bindings
-  if ($('pop-close-btn')) $('pop-close-btn').addEventListener('click', () => $('membership-modal').classList.remove('active'));
-  $('membership-modal').addEventListener('click', (e) => { if (e.target === $('membership-modal')) $('membership-modal').classList.remove('active'); });
-
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if ($('lightbox-modal').classList.contains('active')) {
@@ -1596,7 +1581,7 @@ async function init() {
       } else {
         closeModal();
         closePinModal(false);
-        ['tools-modal', 'partnership-modal', 'about-modal', 'donation-modal', 'membership-modal'].forEach(id => {
+        ['tools-modal', 'partnership-modal', 'about-modal', 'donation-modal'].forEach(id => {
           const m = $(id);
           if (m) m.classList.remove('active');
         });
