@@ -1855,27 +1855,92 @@ async function suLookup(sid64) {
       }
     }
 
-    // 2. Search active keys in keyList (SU_VIEW_URL)
-    const keys = await getKeyList(); // cached short TTL
     const today = suTodayStr();
     const matches = [];
 
-    for (const k of keys) {
-      const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => {
-        const st = String((s && s.steamid) || (s && s.steam_id) || s).trim();
-        return st === target64 || st === target32;
-      });
-      if (!mine) continue;
-      const exp = String(k.expiry_date || '');
-      matches.push({
-        cd_key: k.cd_key,
-        expiry_date: exp,
-        key_type: k.key_type || '',
-        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-        expired: exp ? (exp < today) : false,
-      });
-    }
+    // 2. Search active keys in keyList (SU_VIEW_URL)
+    try {
+      const rawKeys = await getKeyList().catch(() => []);
+      const keys = Array.isArray(rawKeys) ? rawKeys : [];
+
+      for (const k of keys) {
+        let ids = [];
+        if (Array.isArray(k.steamids)) {
+          ids = ids.concat(k.steamids);
+        } else if (typeof k.steamids === 'string') {
+          ids = ids.concat(k.steamids.split(',').map((s) => s.trim()));
+        }
+        if (k.steamid) ids.push(k.steamid);
+        if (k.steam_id) ids.push(k.steam_id);
+        if (k.activated_by) ids.push(k.activated_by);
+
+        const mine = ids.find((s) => {
+          const st = String((s && s.steamid) || (s && s.steam_id) || s).trim();
+          return st === target64 || st === target32;
+        });
+        if (!mine) continue;
+        const exp = String(k.expiry_date || '');
+        matches.push({
+          cd_key: k.cd_key || k.cdkey,
+          expiry_date: exp,
+          key_type: k.key_type || 'STANDARD',
+          activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+          expired: exp ? (exp < today) : false,
+        });
+      }
+    } catch (_) {}
+
+    // 3. Search local SQLite DB for activations or used keys
+    try {
+      const localAct = await db.get(`
+        SELECT cdkey, activated_at FROM activations WHERE steamid = ? OR steamid = ? ORDER BY activated_at DESC LIMIT 1
+      `, [target64, target32]);
+      if (localAct) {
+        matches.push({
+          cd_key: localAct.cdkey,
+          expiry_date: '',
+          key_type: 'STANDARD',
+          activation_date: String(localAct.activated_at || '').slice(0, 10),
+          expired: false,
+        });
+      }
+      const localOgAct = await db.get(`
+        SELECT cdkey, activated_at FROM og_activations WHERE steamid = ? OR steamid = ? ORDER BY activated_at DESC LIMIT 1
+      `, [target64, target32]);
+      if (localOgAct) {
+        matches.push({
+          cd_key: localOgAct.cdkey,
+          expiry_date: '',
+          key_type: 'STANDARD',
+          activation_date: String(localOgAct.activated_at || '').slice(0, 10),
+          expired: false,
+        });
+      }
+      const localKey = await db.get(`
+        SELECT cdkey, status, activated_at FROM keys WHERE (activated_by = ? OR activated_by = ?) AND status = 'used' ORDER BY activated_at DESC LIMIT 1
+      `, [target64, target32]);
+      if (localKey) {
+        matches.push({
+          cd_key: localKey.cdkey,
+          expiry_date: '',
+          key_type: 'STANDARD',
+          activation_date: String(localKey.activated_at || '').slice(0, 10),
+          expired: false,
+        });
+      }
+      const localOgKey = await db.get(`
+        SELECT cdkey, status, created_at FROM og_keys WHERE (activated_by = ? OR activated_by = ?) AND status = 'used' ORDER BY created_at DESC LIMIT 1
+      `, [target64, target32]);
+      if (localOgKey) {
+        matches.push({
+          cd_key: localOgKey.cdkey,
+          expiry_date: '',
+          key_type: 'STANDARD',
+          activation_date: String(localOgKey.created_at || '').slice(0, 10),
+          expired: false,
+        });
+      }
+    } catch (_) {}
 
     const activeCandidates = matches.filter((m) => !m.expired).sort(suKeyCompare);
     if (activeCandidates.length) {

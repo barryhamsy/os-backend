@@ -716,9 +716,10 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
     </div>
   </div>
 
-  <!-- Mandatory Membership Activation Pop-up Modal -->
+  <!-- Membership Activation Pop-up Modal -->
   <div id="membership-modal" class="modal-overlay" aria-hidden="true" style="z-index:1000">
-    <div class="modal-card pin-card" style="max-width:460px;padding:32px 28px;text-align:left">
+    <div class="modal-card pin-card" style="max-width:460px;padding:32px 28px;text-align:left;position:relative">
+      <button class="modal-close" id="pop-close-btn" title="Close">&times;</button>
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px">
         <h2 class="h" style="margin:0;font-size:22px">Membership</h2>
         <div id="pop-mempill"></div>
@@ -1584,6 +1585,10 @@ async function init() {
   $('lightbox-next-btn').addEventListener('click', () => openLightbox(currentScreenshotIdx + 1));
   $('lightbox-modal').addEventListener('click', (e) => { if (e.target === $('lightbox-modal')) closeLightbox(); });
 
+  // Membership modal dismiss bindings
+  if ($('pop-close-btn')) $('pop-close-btn').addEventListener('click', () => $('membership-modal').classList.remove('active'));
+  $('membership-modal').addEventListener('click', (e) => { if (e.target === $('membership-modal')) $('membership-modal').classList.remove('active'); });
+
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if ($('lightbox-modal').classList.contains('active')) {
@@ -1591,7 +1596,7 @@ async function init() {
       } else {
         closeModal();
         closePinModal(false);
-        ['tools-modal', 'partnership-modal', 'about-modal', 'donation-modal'].forEach(id => {
+        ['tools-modal', 'partnership-modal', 'about-modal', 'donation-modal', 'membership-modal'].forEach(id => {
           const m = $(id);
           if (m) m.classList.remove('active');
         });
