@@ -944,23 +944,47 @@ const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duck
 
 // Cache the full CD-key list. Served with 30s TTL and fallback to stale copy if upstream is slow.
 const KEYLIST_CACHE_MS = 30 * 1000;
+const KEYLIST_CACHE_FILE = path.join(__dirname, 'key_list_cache.json');
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
+
+// Load disk-seeded key list cache on boot so cold starts never fail
+(function loadKeyListFromDisk() {
+  try {
+    if (fs.existsSync(KEYLIST_CACHE_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(KEYLIST_CACHE_FILE, 'utf8'));
+      if (saved && Array.isArray(saved.keys) && saved.keys.length) {
+        keyListCache.data = saved.keys;
+        keyListCache.fetchedAt = saved.fetchedAt || Date.now();
+        console.log(`[KeyList] Seeded ${saved.keys.length} keys from disk cache`);
+      }
+    }
+  } catch (e) { console.error('[KeyList] disk load failed:', e.message); }
+})();
+
 async function getKeyList() {
   const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
   if (fresh) return keyListCache.data;
   if (keyListCache.pending) return keyListCache.pending;
   keyListCache.pending = (async () => {
     try {
-      const vr = await fetchT(SU_VIEW_URL, {}, 30000);
-      const data = await vr.json().catch(() => null);
-      const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
-      if (!keys) throw new Error('bad key-list payload');
+      const vr = await fetchT(SU_VIEW_URL, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OST-Server/1.0',
+          'Accept': 'application/json, text/plain, */*'
+        }
+      }, 30000);
+      const text = await vr.text().catch(() => '');
+      let data = null;
+      try { data = JSON.parse(text); } catch (_) {}
+      const keys = (data && Array.isArray(data.keys)) ? data.keys : (data && Array.isArray(data) ? data : null);
+      if (!keys || !keys.length) throw new Error('bad key-list payload');
       keyListCache.data = keys;
       keyListCache.fetchedAt = Date.now();
+      fs.writeFile(KEYLIST_CACHE_FILE, JSON.stringify({ keys, fetchedAt: keyListCache.fetchedAt }), () => {});
       return keys;
     } catch (err) {
       if (keyListCache.data) {
-        console.error(`[KeyList] refresh failed, serving cached: ${err.message}`);
+        console.error(`[KeyList] refresh failed, serving cached (${keyListCache.data.length} keys): ${err.message}`);
         return keyListCache.data;
       }
       throw err;
