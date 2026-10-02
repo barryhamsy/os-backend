@@ -97,7 +97,7 @@ a{color:var(--blue);text-decoration:none}
 .modal-trailer{width:100%;height:100%;object-fit:cover;display:block}
 .modal-content{padding:24px 28px;display:flex;flex-direction:column;gap:18px;overflow-x:hidden}
 .modal-header-row{display:flex;align-items:flex-start;gap:18px}
-.modal-cover-wrap{width:180px;aspect-ratio:16/9;flex-shrink:0;border-radius:12px;overflow:hidden;
+.modal-cover-wrap{width:240px;aspect-ratio:460/215;flex-shrink:0;border-radius:12px;overflow:hidden;
   background:#070d14;border:1px solid var(--line2);box-shadow:0 12px 30px rgba(0,0,0,.6);position:relative}
 .modal-cover-img{width:100%;height:100%;object-fit:cover;display:block}
 .modal-title{font-size:24px;font-weight:800;color:#fff;margin:0;line-height:1.2}
@@ -337,15 +337,29 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
   </div>
 
   <div class="wrap">
-    <header>
-      <div class="logo logo-sm" role="img" aria-label="ONENNABE"></div>
-      <div class="hdr-links">
-        <a href="https://steamunlockonennabe.click/" target="_blank" class="hdr-link">🌐 Website</a>
-        <a href="https://steamunlockonennabe.click/docs/" target="_blank" class="hdr-link">📚 Tutorial</a>
-        <a href="https://gofile.io/d/0Rr8eo" target="_blank" class="hdr-link hdr-highlight">💻 Download Desktop App</a>
+    <header style="flex-direction:column;align-items:stretch;gap:12px;margin-bottom:20px">
+      <div class="row" style="width:100%;justify-content:space-between;align-items:center">
+        <div class="logo logo-sm" role="img" aria-label="ONENNABE" style="width:260px;height:60px"></div>
+        <div id="userbox"></div>
       </div>
-      <div class="spacer"></div>
-      <div id="userbox"></div>
+      
+      <!-- Main Nav Bar -->
+      <div class="card" style="padding:10px 16px;margin:0;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+        <div class="tabs" style="margin:0">
+          <button id="tab-all" class="tab active">🎮 Dashboard</button>
+          <button id="tab-mine" class="tab">⭐ My Games</button>
+          <button id="tab-tools" class="tab">🛠️ Tools</button>
+          <button id="tab-about" class="tab">📖 About Us</button>
+          <button id="tab-partner" class="tab">🤝 Partnership</button>
+          <button id="tab-donate" class="tab">💖 Support &amp; Donate</button>
+        </div>
+        
+        <div class="hdr-links">
+          <a href="https://steamunlockonennabe.click/" target="_blank" class="hdr-link">🌐 Website</a>
+          <a href="https://steamunlockonennabe.click/docs/" target="_blank" class="hdr-link">📚 Tutorial</a>
+          <a href="https://gofile.io/d/0Rr8eo" target="_blank" class="hdr-link hdr-highlight">💻 Download Desktop App</a>
+        </div>
+      </div>
     </header>
 
     <!-- Signed out -->
@@ -400,19 +414,12 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
         <!-- Right column: game list & main tabs -->
         <main class="main">
           <div class="card">
-            <div class="tabs">
-              <button id="tab-all" class="tab active">🎮 All games</button>
-              <button id="tab-mine" class="tab">⭐ My games</button>
-              <button id="tab-tools" class="tab">🛠️ Tools</button>
-              <button id="tab-about" class="tab">📖 About Us</button>
-              <button id="tab-partner" class="tab">🤝 Partnership</button>
-              <button id="tab-donate" class="tab">💖 Support &amp; Donate</button>
-              <div class="spacer"></div>
-              <div id="gamecount" class="muted" style="font-size:13px"></div>
-            </div>
-
             <!-- Games Grid Search Area -->
             <div id="game-search-area">
+              <div class="row" style="margin-bottom:14px;justify-content:space-between">
+                <h2 class="h" style="margin:0">Game Catalog</h2>
+                <div id="gamecount" class="muted" style="font-size:13px"></div>
+              </div>
               <input id="search" class="search" placeholder="Search games by name or AppID…">
               <div class="filters">
                 <select id="fgenre" class="sel"><option value="">All genres</option></select>
