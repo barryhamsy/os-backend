@@ -923,8 +923,12 @@ async function suValidate(cd, sid) {
 // lookup endpoint below returns only the requesting SteamID's own key.
 const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duckdns.org/api/view-onennabe-cdkeys';
 
-// Cache the full CD-key list. Served with 30s TTL and fallback to stale copy if upstream is slow.
-const KEYLIST_CACHE_MS = 30 * 1000;
+// Cache the full CD-key list. It has thousands of entries and — while fast from
+// the public internet — is slow to pull from GCE, so fetching it on every
+// membership lookup was timing out (→ "NO MEMBERSHIP" / 502). Fetch at most once
+// per few minutes, dedupe concurrent misses, and serve the last good copy if the
+// upstream is slow or down so lookups keep working.
+const KEYLIST_CACHE_MS = 10 * 60 * 1000;
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
 async function getKeyList() {
   const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
@@ -988,8 +992,56 @@ app.get('/api/su/lookup', async (req, res) => {
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
   const sid64 = toSteamId64(sidIn);
   try {
-    const mem = await suLookup(sid64);
-    return res.json(mem);
+    const keys = await getKeyList(); // cached; served stale if the upstream is slow
+    const today = suTodayStr();
+
+    // Every key this SteamID has activated.
+    const matches = [];
+    for (const k of keys) {
+      const ids = Array.isArray(k.steamids) ? k.steamids : [];
+      const mine = ids.find((s) => String(s && s.steamid) === sid64);
+      if (!mine) continue;
+      const exp = String(k.expiry_date || '');
+      // YYYY-MM-DD compares correctly as a string. Treat "no expiry" as active.
+      const expired = exp ? (exp < today) : false;
+      matches.push({
+        cd_key: k.cd_key,
+        expiry_date: exp,
+        key_type: k.key_type || '',
+        // The SteamID's own activation date, falling back to the key's.
+        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+        expired,
+      });
+    }
+
+    // Prefer the highest-priority key type, then the furthest-out expiry.
+    const active = matches
+      .filter((m) => !m.expired)
+      .sort(suKeyCompare);
+    if (active.length) {
+      const m = active[0];
+      return res.json({
+        found: true,
+        cd_key: m.cd_key,
+        key_type: m.key_type,
+        activation_date: m.activation_date,
+        expiry_date: m.expiry_date,
+      });
+    }
+    if (matches.length) {
+      // Expired — still return the details so the UI can show what expired.
+      const m = matches.slice().sort(suKeyCompare)[0];
+      return res.json({
+        found: false,
+        expired: true,
+        cd_key: m.cd_key,
+        key_type: m.key_type,
+        activation_date: m.activation_date,
+        expiry_date: m.expiry_date,
+        message: 'Your Steam Unlock membership has expired.',
+      });
+    }
+    return res.json({ found: false, message: 'No Steam Unlock membership found for this Steam account.' });
   } catch (e) {
     return res.status(502).json({ found: false, error: 'Could not reach the key server' });
   }
@@ -1788,60 +1840,24 @@ app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/d
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
 async function suLookup(sid64) {
-  if (!sid64) return { found: false };
-  try {
-    const keys = await getKeyList(); // cached short TTL
-    const today = suTodayStr();
-    const matches = [];
-    for (const k of keys) {
-      const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => String(s && s.steamid) === String(sid64));
-      if (!mine) continue;
-      const exp = String(k.expiry_date || '');
-      matches.push({
-        cd_key: k.cd_key,
-        expiry_date: exp,
-        key_type: k.key_type || '',
-        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-        expired: exp ? (exp < today) : false,
-      });
-    }
-
-    const activeCandidates = matches.filter((m) => !m.expired).sort(suKeyCompare);
-
-    for (const candidate of activeCandidates) {
-      // Re-validate candidate key against upstream validate-onennabe-cdkey endpoint
-      try {
-        const vd = await suValidate(candidate.cd_key, sid64);
-        if (vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true)) {
-          return { found: true, ...candidate };
-        } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
-          // Key was revoked upstream! Invalidate keyListCache so fresh keys are loaded
-          keyListCache.fetchedAt = 0;
-        }
-      } catch (e) {
-        // Network fallback: if validation fails due to network error, treat key as active
-        return { found: true, ...candidate };
-      }
-    }
-
-    if (matches.length) {
-      const m = matches.slice().sort(suKeyCompare)[0];
-      return {
-        found: false,
-        expired: !matches.some((m) => !m.expired),
-        revoked: true,
-        cd_key: m.cd_key,
-        key_type: m.key_type,
-        activation_date: m.activation_date,
-        expiry_date: m.expiry_date,
-        message: 'Your Steam Unlock membership has been revoked or expired.',
-      };
-    }
-    return { found: false, message: 'No Steam Unlock membership found for this Steam account.' };
-  } catch (e) {
-    return { found: false, error: e.message };
+  const keys = await getKeyList(); // cached; served stale if the upstream is slow
+  const today = suTodayStr();
+  const matches = [];
+  for (const k of keys) {
+    const ids = Array.isArray(k.steamids) ? k.steamids : [];
+    const mine = ids.find((s) => String(s && s.steamid) === sid64);
+    if (!mine) continue;
+    const exp = String(k.expiry_date || '');
+    matches.push({
+      cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '',
+      activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+      expired: exp ? (exp < today) : false,
+    });
   }
+  const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
+  if (active.length) return { found: true, ...active[0] };
+  if (matches.length) { const m = matches.slice().sort(suKeyCompare)[0]; return { found: false, expired: true, ...m }; }
+  return { found: false };
 }
 
 // ── Steam Profile Cache ───────────────────────────────────────────────────────
