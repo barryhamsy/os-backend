@@ -984,6 +984,7 @@ function suKeyCompare(a, b) {
 // One-click activation for existing users: finds a key this SteamID has already
 // activated and returns ONLY that user's own key (never anyone else's).
 app.get('/api/su/lookup', async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   const sidIn = String(req.query.steamid || '').trim();
   if (!sidIn) return res.status(400).json({ found: false, error: 'steamid required' });
   const sid64 = toSteamId64(sidIn);
@@ -1869,6 +1870,7 @@ async function fetchSteamProfile(sid) {
 // Who am I + membership + my unlocked games + persona name & avatar.
 app.get('/dash/api/me', requireSteam, async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const sid = toSteamId64(req.steamid);
     const [mem, appids, profile] = await Promise.all([
       suLookup(sid).catch(() => ({ found: false })),
