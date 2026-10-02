@@ -1792,49 +1792,41 @@ app.get('/auth/steam/return', async (req, res) => {
 app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/dashboard'); });
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
-// ── Membership lookup helper (shared) ─────────────────────────────────────────
 async function suLookup(sid64) {
   if (!sid64) return { found: false };
   try {
     const sid = String(sid64);
-    // Check recent activations cache first (valid for 15 minutes)
-    if (_recentActivationsCache.has(sid)) {
-      const recent = _recentActivationsCache.get(sid);
+    const target64 = toSteamId64(sid);
+    const target32 = String(BigInt(target64) - STEAM64_BASE);
+
+    // 1. Check recent activations cache first (valid for 15 minutes)
+    if (_recentActivationsCache.has(target64) || _recentActivationsCache.has(target32)) {
+      const recent = _recentActivationsCache.get(target64) || _recentActivationsCache.get(target32);
       if (Date.now() - recent.timestamp < 15 * 60 * 1000) {
-        try {
-          const vd = await suValidate(recent.cd_key, sid);
-          const isOk = vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true || (vd.message && /validated|activated|success/i.test(vd.message)));
-          if (isOk) {
-            return {
-              found: true,
-              cd_key: recent.cd_key,
-              key_type: recent.key_type || (vd && (vd.key_type || vd.type)) || 'STANDARD',
-              activation_date: recent.activation_date,
-              expiry_date: recent.expiry_date || (vd && vd.expiry_date) || '',
-            };
-          } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
-            _recentActivationsCache.delete(sid);
-          }
-        } catch (_) {
-          return {
-            found: true,
-            cd_key: recent.cd_key,
-            key_type: recent.key_type || 'STANDARD',
-            activation_date: recent.activation_date,
-            expiry_date: recent.expiry_date || '',
-          };
-        }
+        return {
+          found: true,
+          cd_key: recent.cd_key,
+          key_type: recent.key_type || 'STANDARD',
+          activation_date: recent.activation_date,
+          expiry_date: recent.expiry_date || '',
+        };
       } else {
-        _recentActivationsCache.delete(sid);
+        _recentActivationsCache.delete(target64);
+        _recentActivationsCache.delete(target32);
       }
     }
 
+    // 2. Search active keys in keyList (SU_VIEW_URL)
     const keys = await getKeyList(); // cached short TTL
     const today = suTodayStr();
     const matches = [];
+
     for (const k of keys) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => String(s && s.steamid) === sid);
+      const mine = ids.find((s) => {
+        const st = String((s && s.steamid) || (s && s.steam_id) || s).trim();
+        return st === target64 || st === target32;
+      });
       if (!mine) continue;
       const exp = String(k.expiry_date || '');
       matches.push({
@@ -1847,42 +1839,11 @@ async function suLookup(sid64) {
     }
 
     const activeCandidates = matches.filter((m) => !m.expired).sort(suKeyCompare);
-    let wasRevoked = false;
-    let revokedKeyData = null;
-
-    for (const candidate of activeCandidates) {
-      // Re-validate candidate key against upstream validate-onennabe-cdkey endpoint
-      try {
-        const vd = await suValidate(candidate.cd_key, sid);
-        const isOk = vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true || (vd.message && /validated|activated|success/i.test(vd.message)));
-        if (isOk) {
-          return { found: true, ...candidate };
-        } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
-          // Key was explicitly revoked upstream!
-          keyListCache.fetchedAt = 0;
-          wasRevoked = true;
-          revokedKeyData = candidate;
-        }
-      } catch (e) {
-        // Network fallback: if validation fails due to network error, treat key as active
-        return { found: true, ...candidate };
-      }
+    if (activeCandidates.length) {
+      return { found: true, ...activeCandidates[0] };
     }
 
     const expiredMatches = matches.filter((m) => m.expired);
-    if (wasRevoked && revokedKeyData) {
-      return {
-        found: false,
-        revoked: true,
-        expired: false,
-        cd_key: revokedKeyData.cd_key,
-        key_type: revokedKeyData.key_type,
-        activation_date: revokedKeyData.activation_date,
-        expiry_date: revokedKeyData.expiry_date,
-        message: 'Your CD key has been revoked.',
-      };
-    }
-
     if (expiredMatches.length) {
       const m = expiredMatches.sort(suKeyCompare)[0];
       return {

@@ -754,7 +754,11 @@ async function api(path, opts = {}) {
     throw err;
   } finally { clearTimeout(t); }
   if (r.status === 401) { showSignedOut(); throw new Error('unauth'); }
-  if (r.status >= 500) throw new Error('http ' + r.status); // 5xx / 504 → caller treats as failure
+  if (r.status >= 500) {
+    const errBody = await r.json().catch(() => null);
+    const msg = (errBody && (errBody.message || errBody.error)) || ('Server error (HTTP ' + r.status + ')');
+    throw new Error(msg);
+  }
   return r.json();
 }
 
