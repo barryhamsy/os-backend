@@ -906,20 +906,35 @@ const _recentActivationsCache = new Map();
 // whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
 async function suValidate(cd, sid) {
   const sid64 = sid ? toSteamId64(String(sid)) : '';
-  const vr = await fetchT(SU_VALIDATE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      cd_key: cd, cdkey: cd,
-      steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
-    }),
-  }, 45000); // key binding is a write — allow up to 45s for slow upstream server
-  const res = await vr.json().catch(() => null);
-  const isOk = res && (res.status === 'success' || res.status === 'Activated' || res.activated || (res.message && /validated|activated|success/i.test(res.message)));
-  if (isOk) {
-    keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
+  try {
+    const vr = await fetchT(SU_VALIDATE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OST-Server/1.0',
+        'Accept': 'application/json, text/plain, */*'
+      },
+      body: JSON.stringify({
+        cd_key: cd, cdkey: cd,
+        steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
+      }),
+    }, 25000); // 25s timeout for upstream server
+    const text = await vr.text().catch(() => '');
+    let res = null;
+    try { res = JSON.parse(text); } catch (_) {
+      if (text.toLowerCase().includes('success') || text.toLowerCase().includes('activated')) {
+        res = { status: 'success', message: 'CD Key validated successfully' };
+      }
+    }
+    const isOk = res && (res.status === 'success' || res.status === 'Activated' || res.activated || (res.message && /validated|activated|success/i.test(res.message)));
+    if (isOk) {
+      keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
+    }
+    return res || { status: 'error', message: 'Validation server returned invalid response' };
+  } catch (err) {
+    console.error(`[suValidate] error validating ${cd} for ${sid64}:`, err.message);
+    return { status: 'error', message: 'Could not reach key validation server (' + err.message + ')' };
   }
-  return res;
 }
 
 // Full key list (server-side only). Used to look up an existing user's own key
