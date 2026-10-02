@@ -57,6 +57,7 @@ a{color:var(--blue);text-decoration:none}
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
 
 /* ── user profile box ────────────────────────────────────────────── */
+#userbox{position:relative;z-index:1001}
 .user-profile{display:flex;align-items:center;gap:12px;background:rgba(16,29,43,.75);
   border:1px solid var(--line);padding:6px 14px 6px 8px;border-radius:12px;
   box-shadow:0 4px 16px rgba(0,0,0,.25)}
@@ -493,6 +494,21 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
       <button class="slider-btn next" id="lightbox-next-btn" title="Next screenshot" style="right:14px;width:44px;height:44px;font-size:24px">›</button>
       <div id="lightbox-counter" class="lightbox-counter"></div>
     </div>
+  <!-- Mandatory Membership Activation Pop-up Modal -->
+  <div id="membership-modal" class="modal-overlay" aria-hidden="true" style="z-index:1000">
+    <div class="modal-card pin-card" style="max-width:460px;padding:32px 28px;text-align:left">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h2 class="h" style="margin:0;font-size:22px">Membership</h2>
+        <div id="pop-mempill"></div>
+      </div>
+      <div id="pop-memline" class="muted" style="margin-bottom:18px;font-size:14px;line-height:1.5">Activate a CD key below to start unlocking games.</div>
+      <div id="pop-activatebox">
+        <div class="muted" style="margin-bottom:8px;font-size:13px">Have a CD key? Activate it to your account:</div>
+        <input id="pop-cdkey" class="key" placeholder="XXXX-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off" style="max-width:none;width:100%">
+        <button id="pop-activatebtn" class="btn btn-primary" style="width:100%;margin-top:12px;padding:12px;font-size:15px">Activate</button>
+        <div id="pop-actstatus" class="status" style="margin-top:10px;text-align:center"></div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -535,20 +551,30 @@ function daysUntil(ymd) {
 function renderMembership() {
   const mem = ME.membership || { found:false };
   const box = $('mempill'), line = $('memline'), det = $('memdetails');
+  const popModal = $('membership-modal'), popPill = $('pop-mempill'), popLine = $('pop-memline');
   const dleft = daysUntil(mem.expiry_date);
-  // Hide the CD-key activation field once membership is active — only show it
-  // when there's no active membership (none or expired).
+  
   $('activatebox').classList.toggle('hide', !!mem.found);
   if (mem.found) {
+    if (popModal) popModal.classList.remove('active');
     const label = (mem.expiry_date && dleft!=null) ? `ACTIVE · ${dleft} day${dleft===1?'':'s'} left` : 'ACTIVE';
-    box.innerHTML = `<span class="pill pill-on">${label}</span>`;
-    line.textContent = 'Your membership is active — unlock as many games as you like below.';
-  } else if (mem.expired) {
-    box.innerHTML = '<span class="pill pill-off">EXPIRED</span>';
-    line.textContent = 'Your membership has expired. Activate a new CD key to keep unlocking.';
+    if (box) box.innerHTML = `<span class="pill pill-on">${label}</span>`;
+    if (line) line.textContent = 'Your membership is active — unlock as many games as you like below.';
   } else {
-    box.innerHTML = '<span class="pill pill-warn">NO MEMBERSHIP</span>';
-    line.textContent = 'Activate a CD key below to start unlocking games.';
+    if (popModal) popModal.classList.add('active');
+    let pillHtml = '';
+    let lineTxt = '';
+    if (mem.expired) {
+      pillHtml = '<span class="pill pill-off">EXPIRED</span>';
+      lineTxt = 'Your membership has expired. Activate a new CD key to keep unlocking.';
+    } else {
+      pillHtml = '<span class="pill pill-warn">NO MEMBERSHIP</span>';
+      lineTxt = 'Activate a CD key below to start unlocking games.';
+    }
+    if (box) box.innerHTML = pillHtml;
+    if (line) line.textContent = lineTxt;
+    if (popPill) popPill.innerHTML = pillHtml;
+    if (popLine) popLine.textContent = lineTxt;
   }
   if (mem.cd_key) {
     det.classList.remove('hide');
@@ -1170,16 +1196,19 @@ function switchTab(scope) {
   loadGames(1);
 }
 
-async function activateKey() {
-  const cd = $('cdkey').value.trim();
-  const btn = $('activatebtn'), st = $('actstatus');
+async function activateKey(isPop = false) {
+  const cdEl = isPop ? $('pop-cdkey') : $('cdkey');
+  const btn = isPop ? $('pop-activatebtn') : $('activatebtn');
+  const st = isPop ? $('pop-actstatus') : $('actstatus');
+  const cd = cdEl ? cdEl.value.trim() : '';
+
   if (!cd) { st.style.color='var(--red)'; st.textContent='Enter your CD key.'; return; }
   btn.disabled=true; st.style.color='var(--muted)'; st.innerHTML='<span class="spin"></span> Activating…';
   try {
     const r = await api('/dash/api/activate', { method:'POST', body: JSON.stringify({ cd_key: cd }) });
     if (r.status === 'success') {
       st.style.color='var(--green)'; st.textContent = r.message || 'Activated! Membership is now active.';
-      $('cdkey').value='';
+      if (cdEl) cdEl.value='';
       await refreshMe();
     } else {
       st.style.color='var(--red)'; st.textContent = r.message || 'Activation failed.';
@@ -1276,8 +1305,10 @@ async function init() {
   });
 
   curQuery = ''; loadGames(1);
-  $('activatebtn').addEventListener('click', activateKey);
-  $('cdkey').addEventListener('keydown', e => { if (e.key==='Enter') activateKey(); });
+  $('activatebtn').addEventListener('click', () => activateKey(false));
+  $('cdkey').addEventListener('keydown', e => { if (e.key==='Enter') activateKey(false); });
+  if ($('pop-activatebtn')) $('pop-activatebtn').addEventListener('click', () => activateKey(true));
+  if ($('pop-cdkey')) $('pop-cdkey').addEventListener('keydown', e => { if (e.key==='Enter') activateKey(true); });
   $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(()=>{ curQuery=$('search').value.trim(); loadGames(1); },300); });
   $('tab-all').addEventListener('click', () => switchTab('all'));
   $('tab-mine').addEventListener('click', () => switchTab('unlocked'));
