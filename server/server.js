@@ -874,6 +874,25 @@ app.post('/api/manifest/bump', (req, res) => {
   res.json({ ok: true, epoch: _manifestEpoch });
 });
 
+// GitHub Webhook listener: Automatically bumps epoch when changes are pushed to GitHub repository
+app.post('/api/github/webhook', (req, res) => {
+  const secret = process.env.GITHUB_WEBHOOK_SECRET || process.env.MANIFEST_BUMP_KEY;
+  if (secret) {
+    const sig = req.headers['x-hub-signature-256'];
+    if (sig) {
+      const crypto = require('crypto');
+      const hmac = crypto.createHmac('sha256', secret);
+      const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
+      if (sig !== digest) {
+        return res.status(403).json({ error: 'invalid signature' });
+      }
+    }
+  }
+  _manifestEpoch = Date.now();
+  console.log(`[GitHub Webhook] Pushed event received. Bumped _manifestEpoch to ${_manifestEpoch}`);
+  res.json({ ok: true, epoch: _manifestEpoch, message: 'Manifest epoch bumped via GitHub webhook' });
+});
+
 // Steam Unlock membership. Validation lives at steamunlockonennabe; the plugin's
 // Lua backend can only reliably send GET query params (not POST bodies), so these
 // are GET endpoints and os-backend does the proper server-to-server POST.
