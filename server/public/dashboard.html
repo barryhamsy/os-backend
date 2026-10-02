@@ -789,6 +789,9 @@ function renderMembership() {
     if (mem.expired) {
       pillHtml = '<span class="pill pill-off">EXPIRED</span>';
       lineTxt = 'Your membership has expired. Activate a new CD key to keep unlocking.';
+    } else if (mem.revoked) {
+      pillHtml = '<span class="pill pill-off">REVOKED</span>';
+      lineTxt = 'Your CD key has been revoked. Activate a new CD key to keep unlocking.';
     } else {
       pillHtml = '<span class="pill pill-warn">NO MEMBERSHIP</span>';
       lineTxt = 'Activate a CD key below to start unlocking games.';
@@ -798,7 +801,7 @@ function renderMembership() {
     if (popPill) popPill.innerHTML = pillHtml;
     if (popLine) popLine.textContent = lineTxt;
   }
-  if (mem.cd_key) {
+  if (mem.cd_key && mem.found) {
     det.classList.remove('hide');
     det.innerHTML =
       `<div class="k">CD Key</div><div class="v mono">${esc(mem.cd_key)}</div>` +
