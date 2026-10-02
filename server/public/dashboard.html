@@ -286,10 +286,10 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .topcmd{background:#08121d;border:1px dashed rgba(102,192,244,.4);border-radius:11px;padding:12px 14px;
   font-family:ui-monospace,monospace;font-size:13px;color:var(--blue);margin-top:8px;user-select:all;
   box-shadow:inset 0 0 30px rgba(26,159,255,.06)}
-.pager{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:22px}
-.pager .btn{padding:9px 16px}
-.pager .btn:disabled{opacity:.4;cursor:default}
-#pageinfo{font-size:13px;min-width:130px;text-align:center}
+.pager{position:sticky;bottom:18px;z-index:100;display:flex;align-items:center;justify-content:center;gap:16px;margin:22px auto 0;width:fit-content;max-width:90vw;padding:8px 20px;border-radius:30px;background:linear-gradient(180deg,rgba(14,24,37,.94) 0%,rgba(10,16,24,.96) 100%);border:1px solid rgba(102,192,244,.35);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 10px 30px rgba(0,0,0,.7),0 0 18px rgba(26,159,255,.2);transition:all .2s ease}
+.pager .btn{padding:8px 18px;border-radius:20px;font-size:13px;font-weight:700}
+.pager .btn:disabled{opacity:.35;cursor:default}
+#pageinfo{font-size:13px;font-weight:700;color:var(--text);min-width:110px;text-align:center;letter-spacing:.3px}
 
 /* ── signed-out hero ─────────────────────────────────────────────── */
 .hero{min-height:64vh;display:flex;align-items:center;justify-content:center;padding:20px 0}
