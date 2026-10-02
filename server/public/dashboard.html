@@ -1429,18 +1429,24 @@ async function activateKey(isPop = false) {
   btn.disabled=true; st.style.color='var(--muted)'; st.innerHTML='<span class="spin"></span> Activating…';
   try {
     const r = await api('/dash/api/activate', { method:'POST', body: JSON.stringify({ cd_key: cd }) });
-    if (r.status === 'success' || r.activated) {
+    const isOk = r && (r.status === 'success' || r.status === 'Activated' || r.activated || (r.message && /validated|activated|success/i.test(r.message)));
+    if (isOk) {
       st.style.color='var(--green)'; st.textContent = r.message || 'Activated! Membership is now active.';
       if (cdEl) cdEl.value='';
-      // Instantly dismiss modal and render active state locally
+      const popModal = $('membership-modal');
+      if (popModal) popModal.classList.remove('active');
       if (!ME) ME = {};
-      if (!ME.membership) ME.membership = {};
-      ME.membership.found = true;
-      ME.membership.cd_key = cd;
+      ME.membership = {
+        found: true,
+        cd_key: cd,
+        key_type: (r && (r.key_type || r.type)) || 'STANDARD',
+        activation_date: new Date().toISOString().slice(0, 10),
+        expiry_date: (r && r.expiry_date) || ''
+      };
       renderMembership();
       await refreshMe();
     } else {
-      st.style.color='var(--red)'; st.textContent = r.message || 'Activation failed.';
+      st.style.color='var(--red)'; st.textContent = (r && r.message) || 'Activation failed.';
     }
   } catch(e){ if(e.message!=='unauth'){ st.style.color='var(--red)'; st.textContent='Error: '+e.message; } }
   finally { btn.disabled=false; }

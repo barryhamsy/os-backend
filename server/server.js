@@ -898,6 +898,9 @@ app.post('/api/github/webhook', (req, res) => {
 // are GET endpoints and os-backend does the proper server-to-server POST.
 const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonennabe.duckdns.org/validate-onennabe-cdkey';
 
+// Cache recently activated keys per SteamID to bridge any propagation delay in SU_VIEW_URL
+const _recentActivationsCache = new Map();
+
 // Server-to-server: ask steamunlockonennabe whether a CD key is valid. It needs
 // both the CD key and the SteamID; we send field-name aliases so it matches
 // whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
@@ -912,7 +915,8 @@ async function suValidate(cd, sid) {
     }),
   }, 45000); // key binding is a write — allow up to 45s for slow upstream server
   const res = await vr.json().catch(() => null);
-  if (res && (res.status === 'success' || res.status === 'Activated' || res.activated)) {
+  const isOk = res && (res.status === 'success' || res.status === 'Activated' || res.activated || (res.message && /validated|activated|success/i.test(res.message)));
+  if (isOk) {
     keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
   }
   return res;
@@ -1788,15 +1792,49 @@ app.get('/auth/steam/return', async (req, res) => {
 app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/dashboard'); });
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
+// ── Membership lookup helper (shared) ─────────────────────────────────────────
 async function suLookup(sid64) {
   if (!sid64) return { found: false };
   try {
+    const sid = String(sid64);
+    // Check recent activations cache first (valid for 15 minutes)
+    if (_recentActivationsCache.has(sid)) {
+      const recent = _recentActivationsCache.get(sid);
+      if (Date.now() - recent.timestamp < 15 * 60 * 1000) {
+        try {
+          const vd = await suValidate(recent.cd_key, sid);
+          const isOk = vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true || (vd.message && /validated|activated|success/i.test(vd.message)));
+          if (isOk) {
+            return {
+              found: true,
+              cd_key: recent.cd_key,
+              key_type: recent.key_type || (vd && (vd.key_type || vd.type)) || 'STANDARD',
+              activation_date: recent.activation_date,
+              expiry_date: recent.expiry_date || (vd && vd.expiry_date) || '',
+            };
+          } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
+            _recentActivationsCache.delete(sid);
+          }
+        } catch (_) {
+          return {
+            found: true,
+            cd_key: recent.cd_key,
+            key_type: recent.key_type || 'STANDARD',
+            activation_date: recent.activation_date,
+            expiry_date: recent.expiry_date || '',
+          };
+        }
+      } else {
+        _recentActivationsCache.delete(sid);
+      }
+    }
+
     const keys = await getKeyList(); // cached short TTL
     const today = suTodayStr();
     const matches = [];
     for (const k of keys) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => String(s && s.steamid) === String(sid64));
+      const mine = ids.find((s) => String(s && s.steamid) === sid);
       if (!mine) continue;
       const exp = String(k.expiry_date || '');
       matches.push({
@@ -1815,8 +1853,9 @@ async function suLookup(sid64) {
     for (const candidate of activeCandidates) {
       // Re-validate candidate key against upstream validate-onennabe-cdkey endpoint
       try {
-        const vd = await suValidate(candidate.cd_key, sid64);
-        if (vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true)) {
+        const vd = await suValidate(candidate.cd_key, sid);
+        const isOk = vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true || (vd.message && /validated|activated|success/i.test(vd.message)));
+        if (isOk) {
           return { found: true, ...candidate };
         } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
           // Key was explicitly revoked upstream!
@@ -1914,6 +1953,19 @@ app.post('/dash/api/activate', requireSteam, async (req, res) => {
     if (!cd) return res.status(400).json({ status: 'error', message: 'CD key required' });
     const vd = await suValidate(cd, sid);
     if (!vd) return res.status(502).json({ status: 'error', message: 'Validation server error' });
+
+    const isOk = vd.status === 'success' || vd.status === 'Activated' || vd.activated || (vd.message && /validated|activated|success/i.test(vd.message));
+    if (isOk) {
+      _recentActivationsCache.set(sid, {
+        cd_key: cd,
+        key_type: vd.key_type || vd.type || 'STANDARD',
+        activation_date: suTodayStr(),
+        expiry_date: vd.expiry_date || '',
+        timestamp: Date.now()
+      });
+      keyListCache.fetchedAt = 0;
+    }
+
     return res.json(vd);
   } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server' }); }
 });
