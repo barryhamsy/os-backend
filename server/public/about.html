@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About Us - Steam Unlock Onennabe</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --card-bg: rgba(22, 27, 38, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent: #10b981;
+      --accent-hover: #059669;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --nav-bg: rgba(11, 14, 20, 0.85);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(16, 185, 129, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 40%);
+      background-attachment: fixed;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--nav-bg);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--card-border);
+      padding: 0.8rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      text-decoration: none;
+      color: #fff;
+    }
+
+    .nav-brand img {
+      height: 48px;
+      width: auto;
+      object-fit: contain;
+    }
+
+    .nav-brand span {
+      font-weight: 800;
+      font-size: 1.35rem;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #fff 30%, var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.92rem;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+    }
+
+    .nav-links a:hover, .nav-links a.active {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 3rem auto;
+      padding: 0 1.5rem;
+      flex: 1;
+    }
+
+    .page-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+
+    .page-header h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(135deg, #ffffff 0%, #10b981 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .page-header p {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+    }
+
+    .about-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2.5rem;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      line-height: 1.8;
+      font-size: 1.05rem;
+    }
+
+    .about-card p {
+      margin-bottom: 1.5rem;
+      color: #d1d5db;
+    }
+
+    .about-card p:last-child {
+      margin-bottom: 0;
+    }
+
+    .highlight-quote {
+      border-left: 4px solid var(--accent);
+      background: rgba(16, 185, 129, 0.05);
+      padding: 1.25rem 1.5rem;
+      border-radius: 0 12px 12px 0;
+      margin: 2rem 0;
+      font-style: italic;
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .timeline-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent);
+      padding: 0.3rem 0.8rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    footer {
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--card-border);
+      font-size: 0.9rem;
+      margin-top: 4rem;
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar">
+    <a href="/dashboard" class="nav-brand">
+      <img src="/logo.png" alt="Logo">
+      <span>Onennabe</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="/dashboard"><i class="fa-solid fa-gamepad"></i> Dashboard</a></li>
+      <li><a href="https://steamunlockonennabe.click/" target="_blank"><i class="fa-solid fa-globe"></i> Website</a></li>
+      <li><a href="https://steamunlockonennabe.click/docs/" target="_blank"><i class="fa-solid fa-book"></i> Tutorial</a></li>
+      <li><a href="https://gofile.io/d/0Rr8eo" target="_blank"><i class="fa-solid fa-download"></i> Desktop App</a></li>
+      <li><a href="/tools"><i class="fa-solid fa-wrench"></i> Tools</a></li>
+      <li><a href="/partnership"><i class="fa-solid fa-handshake"></i> Partnership</a></li>
+      <li><a href="/about" class="active"><i class="fa-solid fa-circle-info"></i> About Us</a></li>
+      <li><a href="/donate"><i class="fa-solid fa-heart"></i> Donate</a></li>
+    </ul>
+  </nav>
+
+  <div class="container">
+    <div class="page-header">
+      <div class="timeline-badge"><i class="fa-solid fa-clock-rotate-left"></i> ESTABLISHED 2024</div>
+      <h1>Our Journey & Story</h1>
+      <p>Continuous evolution, driven by passion and dedication.</p>
+    </div>
+
+    <div class="about-card">
+      <p>
+        We have been developing the software since <strong>2024</strong> and have never stopped a single day on improving it. 
+        Back then, we were using Hammer, which was pretty great at the start, but they eventually dumped their customer base due to greed. They released another version under the excuse of a Steam update to x64 bits. Nevertheless, we remain thankful for their pioneering work in this method.
+      </p>
+
+      <div class="highlight-quote">
+        "That's when we said: it's enough, it's time to make our own tool."
+      </div>
+
+      <p>
+        And thus, we started developing in early 2024, starting with a library of only 2,000 games. We adapted, observed other tools, and thought we could parody them—hence the name <em>Wannabe</em>, stylized as <strong>Onennabe</strong>.
+      </p>
+
+      <p>
+        Now here we are today. To all the OG testers out there who stuck with us from day one: <strong>Thank you.</strong>
+      </p>
+
+      <p style="margin-top: 2rem; font-weight: 700; color: var(--accent); font-size: 1.2rem; text-align: center;">
+        Keep sailing... pirates! 🏴‍☠️
+      </p>
+    </div>
+  </div>
+
+  <footer>
+    &copy; 2024-2026 Steam Unlock Onennabe. All rights reserved.
+  </footer>
+
+</body>
+</html>
