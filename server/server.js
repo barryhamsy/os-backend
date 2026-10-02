@@ -1809,6 +1809,8 @@ async function suLookup(sid64) {
     }
 
     const activeCandidates = matches.filter((m) => !m.expired).sort(suKeyCompare);
+    let wasRevoked = false;
+    let revokedKeyData = null;
 
     for (const candidate of activeCandidates) {
       // Re-validate candidate key against upstream validate-onennabe-cdkey endpoint
@@ -1817,8 +1819,10 @@ async function suLookup(sid64) {
         if (vd && (vd.status === 'success' || vd.status === 'Activated' || vd.activated === true)) {
           return { found: true, ...candidate };
         } else if (vd && (vd.status === 'error' || vd.message === 'Invalid CD Key')) {
-          // Key was revoked upstream! Invalidate keyListCache so fresh keys are loaded
+          // Key was explicitly revoked upstream!
           keyListCache.fetchedAt = 0;
+          wasRevoked = true;
+          revokedKeyData = candidate;
         }
       } catch (e) {
         // Network fallback: if validation fails due to network error, treat key as active
@@ -1826,19 +1830,34 @@ async function suLookup(sid64) {
       }
     }
 
-    if (matches.length) {
-      const m = matches.slice().sort(suKeyCompare)[0];
+    const expiredMatches = matches.filter((m) => m.expired);
+    if (wasRevoked && revokedKeyData) {
       return {
         found: false,
-        expired: !matches.some((m) => !m.expired),
         revoked: true,
+        expired: false,
+        cd_key: revokedKeyData.cd_key,
+        key_type: revokedKeyData.key_type,
+        activation_date: revokedKeyData.activation_date,
+        expiry_date: revokedKeyData.expiry_date,
+        message: 'Your CD key has been revoked.',
+      };
+    }
+
+    if (expiredMatches.length) {
+      const m = expiredMatches.sort(suKeyCompare)[0];
+      return {
+        found: false,
+        expired: true,
+        revoked: false,
         cd_key: m.cd_key,
         key_type: m.key_type,
         activation_date: m.activation_date,
         expiry_date: m.expiry_date,
-        message: 'Your Steam Unlock membership has been revoked or expired.',
+        message: 'Your Steam Unlock membership has expired.',
       };
     }
+
     return { found: false, message: 'No Steam Unlock membership found for this Steam account.' };
   } catch (e) {
     return { found: false, error: e.message };
