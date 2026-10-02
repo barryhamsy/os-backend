@@ -906,6 +906,7 @@ const _recentActivationsCache = new Map();
 // whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
 async function suValidate(cd, sid) {
   const sid64 = sid ? toSteamId64(String(sid)) : '';
+  const cleanCd = String(cd || '').trim();
   try {
     const vr = await fetchT(SU_VALIDATE_URL, {
       method: 'POST',
@@ -915,24 +916,30 @@ async function suValidate(cd, sid) {
         'Accept': 'application/json, text/plain, */*'
       },
       body: JSON.stringify({
-        cd_key: cd, cdkey: cd,
-        steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
+        cd_key: cleanCd,
+        steamid: sid64,
       }),
     }, 25000); // 25s timeout for upstream server
     const text = await vr.text().catch(() => '');
     let res = null;
     try { res = JSON.parse(text); } catch (_) {
-      if (text.toLowerCase().includes('success') || text.toLowerCase().includes('activated')) {
+      if (text && (text.toLowerCase().includes('success') || text.toLowerCase().includes('activated'))) {
         res = { status: 'success', message: 'CD Key validated successfully' };
       }
     }
-    const isOk = res && (res.status === 'success' || res.status === 'Activated' || res.activated || (res.message && /validated|activated|success/i.test(res.message)));
-    if (isOk) {
-      keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
+    if (res && typeof res === 'object') {
+      const isOk = res.status === 'success' || res.status === 'Activated' || res.activated || (res.message && /validated|activated|success/i.test(res.message));
+      if (isOk) {
+        keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
+      }
+      return res;
     }
-    return res || { status: 'error', message: 'Validation server returned invalid response' };
+    if (!vr.ok) {
+      return { status: 'error', message: `Validation server returned HTTP ${vr.status}` };
+    }
+    return { status: 'error', message: (text ? text.slice(0, 120) : 'Validation server returned invalid response') };
   } catch (err) {
-    console.error(`[suValidate] error validating ${cd} for ${sid64}:`, err.message);
+    console.error(`[suValidate] error validating ${cleanCd} for ${sid64}:`, err.message);
     return { status: 'error', message: 'Could not reach key validation server (' + err.message + ')' };
   }
 }
@@ -2014,8 +2021,54 @@ app.get('/dash/api/me', requireSteam, async (req, res) => {
 app.post('/dash/api/activate', requireSteam, async (req, res) => {
   try {
     const sid = toSteamId64(req.steamid);
-    const cd = String((req.body && req.body.cd_key) || '').trim();
+    const cd = String((req.body && (req.body.cd_key || req.body.cdkey || req.body.key)) || '').trim();
     if (!cd) return res.status(400).json({ status: 'error', message: 'CD key required' });
+
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+    // 1. Check local DB (keys table - reseller/admin keys)
+    const localKey = await db.get('SELECT * FROM keys WHERE cdkey = ?', [cd.toUpperCase()]).catch(() => null);
+    if (localKey) {
+      const result = await handleKeyActivation(cd, sid, ip);
+      if (result.status === 200 && result.data && result.data.success) {
+        _recentActivationsCache.set(sid, {
+          cd_key: cd.toUpperCase(),
+          key_type: 'STANDARD',
+          activation_date: suTodayStr(),
+          expiry_date: '',
+          timestamp: Date.now()
+        });
+        keyListCache.fetchedAt = 0;
+        return res.json({ status: 'success', message: 'CD Key activated successfully!' });
+      } else {
+        return res.json({ status: 'error', message: (result.data && result.data.error) || 'Key activation failed' });
+      }
+    }
+
+    // 2. Check local DB (og_keys table - OneGamers keys)
+    const localOgKey = await db.get('SELECT * FROM og_keys WHERE cdkey = ?', [cd.toUpperCase()]).catch(() => null);
+    if (localOgKey) {
+      if (localOgKey.status === 'used') {
+        return res.json({ status: 'error', message: 'CD Key has already been activated' });
+      }
+      if (localOgKey.status === 'disabled') {
+        return res.json({ status: 'error', message: 'CD Key is disabled' });
+      }
+      await db.run("UPDATE og_keys SET status = 'used', activated_by = ? WHERE id = ?", [sid, localOgKey.id]);
+      await db.run("INSERT INTO og_activations (cdkey, steamid, appid, ip_address) VALUES (?, ?, ?, ?)", [cd.toUpperCase(), sid, localOgKey.appid, ip || '127.0.0.1']);
+      if (localOgKey.appid) await dbAddUnlock(sid, localOgKey.appid);
+      _recentActivationsCache.set(sid, {
+        cd_key: cd.toUpperCase(),
+        key_type: 'STANDARD',
+        activation_date: suTodayStr(),
+        expiry_date: '',
+        timestamp: Date.now()
+      });
+      keyListCache.fetchedAt = 0;
+      return res.json({ status: 'success', message: 'OneGamers CD Key activated successfully!' });
+    }
+
+    // 3. Upstream validation (Steam Unlock API)
     const vd = await suValidate(cd, sid);
     if (!vd) return res.status(502).json({ status: 'error', message: 'Validation server error' });
 
@@ -2032,7 +2085,7 @@ app.post('/dash/api/activate', requireSteam, async (req, res) => {
     }
 
     return res.json(vd);
-  } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server' }); }
+  } catch (e) { res.status(502).json({ status: 'error', message: 'Could not reach validation server (' + e.message + ')' }); }
 });
 
 // Canonical Steam Store Genres (Single Source of Truth)
