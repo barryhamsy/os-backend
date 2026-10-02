@@ -911,7 +911,11 @@ async function suValidate(cd, sid) {
       steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
     }),
   }, 45000); // key binding is a write — allow up to 45s for slow upstream server
-  return await vr.json().catch(() => null);
+  const res = await vr.json().catch(() => null);
+  if (res && (res.status === 'success' || res.status === 'Activated' || res.activated)) {
+    keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh activation immediately
+  }
+  return res;
 }
 
 // Full key list (server-side only). Used to look up an existing user's own key
