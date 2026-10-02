@@ -53,16 +53,20 @@ a{color:var(--blue);text-decoration:none}
 .logo-sm:hover{transform:scale(1.02)}
 
 /* ── header navbar ───────────────────────────────────────────────── */
-header{display:flex;align-items:center;gap:16px;margin-bottom:24px;flex-wrap:wrap;
-  background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px 20px;
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 12px 32px rgba(0,0,0,.35)}
-.nav-menu{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.nav-item{color:var(--muted);font-weight:700;font-size:13.5px;padding:8px 13px;border-radius:9px;
+header.hdr-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;
+  padding:16px 22px;margin-bottom:24px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:0 12px 36px rgba(0,0,0,.45);display:flex;flex-direction:column;gap:12px}
+.hdr-top{display:flex;align-items:center;justify-content:space-between;width:100%;gap:16px}
+.hdr-logo-link{display:inline-flex;align-items:center;text-decoration:none}
+.hdr-logo-img{height:46px;width:auto;max-width:280px;object-fit:contain;
+  filter:drop-shadow(0 3px 14px rgba(26,159,255,.45));transition:transform .2s ease}
+.hdr-logo-img:hover{transform:scale(1.02)}
+.nav-menu{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--line)}
+.nav-item{color:var(--muted);font-weight:700;font-size:13.5px;padding:8px 14px;border-radius:9px;
   transition:all .15s ease;display:inline-flex;align-items:center;gap:6px;text-decoration:none;border:1px solid transparent}
 .nav-item:hover{color:#fff;background:rgba(255,255,255,.08);border-color:var(--line)}
 .nav-item.active{color:#fff;background:linear-gradient(135deg,var(--blue2),var(--blue3));
   box-shadow:0 4px 16px rgba(26,159,255,.35);border-color:rgba(102,192,244,.4)}
-.spacer{flex:1}
 
 /* ── user profile box ────────────────────────────────────────────── */
 #userbox{position:relative;z-index:1001}
@@ -110,8 +114,13 @@ header{display:flex;align-items:center;gap:16px;margin-bottom:24px;flex-wrap:wra
   </div>
 
   <div class="wrap">
-    <header>
-      <a href="/dashboard" aria-label="ONENNABE Home"><div class="logo logo-sm" role="img" aria-label="ONENNABE"></div></a>
+    <header class="hdr-card">
+      <div class="hdr-top">
+        <a href="/dashboard" class="hdr-logo-link" aria-label="ONENNABE Home">
+          <img src="/logo.png" alt="ONENNABE" class="hdr-logo-img">
+        </a>
+        <div id="userbox"></div>
+      </div>
       <nav class="nav-menu">
         <a href="/dashboard" class="nav-item">🎮 Dashboard</a>
         <a href="https://steamunlockonennabe.click/" target="_blank" class="nav-item">🌐 Website ↗</a>
@@ -122,8 +131,6 @@ header{display:flex;align-items:center;gap:16px;margin-bottom:24px;flex-wrap:wra
         <a href="/about" class="nav-item">🏴‍☠️ About Us</a>
         <a href="/donate" class="nav-item">💖 Support</a>
       </nav>
-      <div class="spacer"></div>
-      <div id="userbox"></div>
     </header>
 
     <div class="card">
