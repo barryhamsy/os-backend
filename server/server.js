@@ -1816,7 +1816,43 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Primary check: Query api/view-onennabe-cdkeys directly (remote source of truth)
+  // 1. Instant local DB cache check (0ms response time).
+  // If a key was activated (via suValidate) or cached, return it instantly!
+  try {
+    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
+    if (local && local.cd_key) {
+      const exp = String(local.expiry_date || '');
+      const isExpired = exp ? (exp < today) : false;
+      if (!isExpired) {
+        // Asynchronously re-verify against remote view-onennabe-cdkeys if cached record is older than 5 mins
+        if (local.updated_at && (Date.now() - local.updated_at > 300000)) {
+          getKeyList().then((keys) => {
+            const matches = [];
+            for (const k of (keys || [])) {
+              const ids = Array.isArray(k.steamids) ? k.steamids : [];
+              const mine = ids.find((s) => String(s && (s.steamid || s)).trim() === sid64);
+              if (mine) matches.push(k);
+            }
+            if (!matches.length) {
+              db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
+            }
+          }).catch(() => {});
+        }
+        return {
+          found: true,
+          cd_key: local.cd_key,
+          key_type: local.key_type || 'STANDARD',
+          activation_date: local.activation_date || '',
+          expiry_date: exp,
+          expired: false
+        };
+      }
+    }
+  } catch (e) {
+    console.error('[suLookup] Local DB check error:', e.message);
+  }
+
+  // 2. Query api/view-onennabe-cdkeys directly if not in local DB
   try {
     const keys = await getKeyList();
     const matches = [];
@@ -1857,28 +1893,6 @@ async function suLookup(sid64) {
     console.error('[suLookup] Error checking api/view-onennabe-cdkeys:', e.message);
   }
 
-  // 2. Fallback check: Allow a 3-minute window for keys validated moments ago via suValidate
-  try {
-    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
-    if (local && local.cd_key && local.updated_at && (Date.now() - local.updated_at < 180000)) {
-      const exp = String(local.expiry_date || '');
-      const isExpired = exp ? (exp < today) : false;
-      if (!isExpired) {
-        return {
-          found: true,
-          cd_key: local.cd_key,
-          key_type: local.key_type || 'STANDARD',
-          activation_date: local.activation_date || '',
-          expiry_date: exp,
-          expired: false
-        };
-      }
-    }
-  } catch (e) {
-    console.error('[suLookup] Local DB query failed:', e.message);
-  }
-
-  // 3. No match in api/view-onennabe-cdkeys and no recent activation -> clean up local DB & return not activated
   await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
   return { found: false };
 }
