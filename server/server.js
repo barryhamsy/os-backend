@@ -952,13 +952,14 @@ const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duck
 const KEYLIST_CACHE_MS = 2 * 1000;
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
 
-async function getKeyList() {
-  const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
+async function getKeyList(forceFresh = false) {
+  if (forceFresh) keyListCache.fetchedAt = 0;
+  const fresh = !forceFresh && keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
   if (fresh) return keyListCache.data;
   if (keyListCache.pending) return keyListCache.pending;
   keyListCache.pending = (async () => {
     try {
-      const vr = await fetchT(SU_VIEW_URL, {}, 15000);
+      const vr = await fetchT(SU_VIEW_URL, { headers: { 'Cache-Control': 'no-cache, no-store' } }, 15000);
       const data = await vr.json().catch(() => null);
       const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
       if (!keys) throw new Error('bad key-list payload');
@@ -1816,45 +1817,9 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Instant local DB cache check (0ms response time).
-  // If a key was activated (via suValidate) or cached, return it instantly!
+  // 1. Primary check: Query api/view-onennabe-cdkeys directly (remote source of truth)
   try {
-    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
-    if (local && local.cd_key) {
-      const exp = String(local.expiry_date || '');
-      const isExpired = exp ? (exp < today) : false;
-      if (!isExpired) {
-        // Asynchronously re-verify against remote view-onennabe-cdkeys if cached record is older than 5 mins
-        if (local.updated_at && (Date.now() - local.updated_at > 300000)) {
-          getKeyList().then((keys) => {
-            const matches = [];
-            for (const k of (keys || [])) {
-              const ids = Array.isArray(k.steamids) ? k.steamids : [];
-              const mine = ids.find((s) => String(s && (s.steamid || s)).trim() === sid64);
-              if (mine) matches.push(k);
-            }
-            if (!matches.length) {
-              db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
-            }
-          }).catch(() => {});
-        }
-        return {
-          found: true,
-          cd_key: local.cd_key,
-          key_type: local.key_type || 'STANDARD',
-          activation_date: local.activation_date || '',
-          expiry_date: exp,
-          expired: false
-        };
-      }
-    }
-  } catch (e) {
-    console.error('[suLookup] Local DB check error:', e.message);
-  }
-
-  // 2. Query api/view-onennabe-cdkeys directly if not in local DB
-  try {
-    const keys = await getKeyList();
+    const keys = await getKeyList(true); // force fresh fetch from api/view-onennabe-cdkeys
     const matches = [];
     for (const k of (keys || [])) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
@@ -1869,6 +1834,7 @@ async function suLookup(sid64) {
         expired: exp ? (exp < today) : false,
       });
     }
+
     const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
     if (active.length) {
       const best = active[0];
@@ -1884,16 +1850,55 @@ async function suLookup(sid64) {
       `, [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]).catch(() => {});
       return { found: true, ...best };
     }
+
+    // No active key on remote api/view-onennabe-cdkeys.
+    // Check if key was activated locally in the last 30s (short grace period for suValidate instant response).
+    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => null);
+    if (local && local.cd_key && local.updated_at && (Date.now() - local.updated_at < 30000)) {
+      const exp = String(local.expiry_date || '');
+      const isExpired = exp ? (exp < today) : false;
+      if (!isExpired) {
+        return {
+          found: true,
+          cd_key: local.cd_key,
+          key_type: local.key_type || 'STANDARD',
+          activation_date: local.activation_date || '',
+          expiry_date: exp,
+          expired: false
+        };
+      }
+    }
+
+    // Key not found on remote api/view-onennabe-cdkeys -> purge local DB & return not activated
+    await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
     if (matches.length) {
       const m = matches.slice().sort(suKeyCompare)[0];
-      await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
       return { found: false, expired: true, ...m };
     }
+    return { found: false };
   } catch (e) {
     console.error('[suLookup] Error checking api/view-onennabe-cdkeys:', e.message);
   }
 
-  await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
+  // Network fallback: check local DB only if api/view-onennabe-cdkeys is completely unreachable
+  try {
+    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
+    if (local && local.cd_key) {
+      const exp = String(local.expiry_date || '');
+      const isExpired = exp ? (exp < today) : false;
+      if (!isExpired) {
+        return {
+          found: true,
+          cd_key: local.cd_key,
+          key_type: local.key_type || 'STANDARD',
+          activation_date: local.activation_date || '',
+          expiry_date: exp,
+          expired: false
+        };
+      }
+    }
+  } catch (err) {}
+
   return { found: false };
 }
 
