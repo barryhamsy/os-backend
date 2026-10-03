@@ -922,6 +922,25 @@ async function suValidate(cd, sid) {
   }, 45000); // key binding is a write — allow up to 45s for slow upstream server
   const res = await vr.json().catch(() => null);
   keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh view-onennabe-cdkeys immediately
+
+  if (res && (res.status === 'success' || res.activated || res.success || (res.message && String(res.message).toLowerCase().includes('validated')) || (res.message && String(res.message).toLowerCase().includes('success')))) {
+    if (sid64) {
+      const kt = res.key_type || res.type || 'STANDARD';
+      const ad = res.activation_date || suTodayStr();
+      const ed = res.expiry_date || res.expires || null;
+      await db.run(`
+        INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(steamid) DO UPDATE SET
+          cd_key = excluded.cd_key,
+          key_type = excluded.key_type,
+          activation_date = excluded.activation_date,
+          expiry_date = excluded.expiry_date,
+          updated_at = excluded.updated_at
+      `, [sid64, cd, kt, ad, ed, Date.now()]).catch((err) => console.error('[user_memberships] db save error:', err.message));
+    }
+  }
+
   return res;
 }
 
@@ -1797,6 +1816,28 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
+  // 1. Instant local DB check (0ms response time for newly activated or cached keys)
+  try {
+    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
+    if (local && local.cd_key) {
+      const exp = String(local.expiry_date || '');
+      const isExpired = exp ? (exp < today) : false;
+      if (!isExpired) {
+        return {
+          found: true,
+          cd_key: local.cd_key,
+          key_type: local.key_type || 'STANDARD',
+          activation_date: local.activation_date || '',
+          expiry_date: exp,
+          expired: false
+        };
+      }
+    }
+  } catch (e) {
+    console.error('[suLookup] Local DB query failed:', e.message);
+  }
+
+  // 2. Upstream fallback query (api/view-onennabe-cdkeys)
   try {
     const keys = await getKeyList(); // queries api/view-onennabe-cdkeys directly
     const matches = [];
@@ -1815,7 +1856,18 @@ async function suLookup(sid64) {
     }
     const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
     if (active.length) {
-      return { found: true, ...active[0] };
+      const best = active[0];
+      await db.run(`
+        INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(steamid) DO UPDATE SET
+          cd_key = excluded.cd_key,
+          key_type = excluded.key_type,
+          activation_date = excluded.activation_date,
+          expiry_date = excluded.expiry_date,
+          updated_at = excluded.updated_at
+      `, [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]).catch(() => {});
+      return { found: true, ...best };
     }
     if (matches.length) {
       const m = matches.slice().sort(suKeyCompare)[0];

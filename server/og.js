@@ -224,9 +224,13 @@ module.exports = function registerOG(app, ctx) {
         github = await deleteKeyFromGitHub(cdkey);
       }
 
+      // Delete user_memberships record if present
+      await db.run('DELETE FROM user_memberships WHERE cd_key = ?', [cdkey]).catch(() => {});
+
       // If key had been activated, remove the appid from member_unlocks & update GitHub entitlements
       if (keyRecord.activated_by) {
         const sid = String(keyRecord.activated_by);
+        await db.run('DELETE FROM user_memberships WHERE steamid = ?', [toSteamId64(sid)]).catch(() => {});
         if (isOG) {
           if (keyRecord.appid && typeof dbRemoveUnlock === 'function') {
             await dbRemoveUnlock(sid, keyRecord.appid);
