@@ -1817,9 +1817,9 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Primary check: Query api/view-onennabe-cdkeys directly (remote source of truth)
+  // 1. Query remote api/view-onennabe-cdkeys (source of truth)
   try {
-    const keys = await getKeyList(true); // force fresh fetch from api/view-onennabe-cdkeys
+    const keys = await getKeyList(true); // force fresh fetch
     const matches = [];
     for (const k of (keys || [])) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
@@ -1851,10 +1851,10 @@ async function suLookup(sid64) {
       return { found: true, ...best };
     }
 
-    // No active key on remote api/view-onennabe-cdkeys.
-    // Check if key was activated locally in the last 30s (short grace period for suValidate instant response).
+    // Remote list does not show an active key for this SteamID yet.
+    // Check if key was activated locally in the last 5 minutes (300,000 ms grace period for upstream indexing lag).
     const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => null);
-    if (local && local.cd_key && local.updated_at && (Date.now() - local.updated_at < 30000)) {
+    if (local && local.cd_key && local.updated_at && (Date.now() - local.updated_at < 300000)) {
       const exp = String(local.expiry_date || '');
       const isExpired = exp ? (exp < today) : false;
       if (!isExpired) {
@@ -1869,7 +1869,7 @@ async function suLookup(sid64) {
       }
     }
 
-    // Key not found on remote api/view-onennabe-cdkeys -> purge local DB & return not activated
+    // Key is not in remote list and not freshly activated (<5m) -> purge local record & return not activated
     await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
     if (matches.length) {
       const m = matches.slice().sort(suKeyCompare)[0];
@@ -1880,7 +1880,7 @@ async function suLookup(sid64) {
     console.error('[suLookup] Error checking api/view-onennabe-cdkeys:', e.message);
   }
 
-  // Network fallback: check local DB only if api/view-onennabe-cdkeys is completely unreachable
+  // Network fallback: check local DB if api/view-onennabe-cdkeys is unreachable
   try {
     const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
     if (local && local.cd_key) {
