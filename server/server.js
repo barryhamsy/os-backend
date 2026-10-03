@@ -929,14 +929,8 @@ async function suValidate(cd, sid) {
       const ad = res.activation_date || suTodayStr();
       const ed = res.expiry_date || res.expires || null;
       await db.run(`
-        INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+        INSERT OR REPLACE INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(steamid) DO UPDATE SET
-          cd_key = excluded.cd_key,
-          key_type = excluded.key_type,
-          activation_date = excluded.activation_date,
-          expiry_date = excluded.expiry_date,
-          updated_at = excluded.updated_at
       `, [sid64, cd, kt, ad, ed, Date.now()]).catch((err) => console.error('[user_memberships] db save error:', err.message));
     }
   }
@@ -1874,14 +1868,8 @@ async function suLookup(sid64) {
     if (active.length) {
       const best = active[0];
       await db.run(`
-        INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+        INSERT OR REPLACE INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(steamid) DO UPDATE SET
-          cd_key = excluded.cd_key,
-          key_type = excluded.key_type,
-          activation_date = excluded.activation_date,
-          expiry_date = excluded.expiry_date,
-          updated_at = excluded.updated_at
       `, [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]).catch(() => {});
       return { found: true, ...best };
     }
