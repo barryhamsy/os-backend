@@ -1817,9 +1817,44 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Query remote api/view-onennabe-cdkeys (source of truth)
+  // 1. Instant local DB cache check (0.1ms). Primary source of truth for active memberships.
   try {
-    const keys = await getKeyList(true); // force fresh fetch
+    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
+    if (local && local.cd_key) {
+      const exp = String(local.expiry_date || '');
+      const isExpired = exp ? (exp < today) : false;
+      if (!isExpired) {
+        // Non-blocking background sync with remote api/view-onennabe-cdkeys if record is older than 5 mins
+        if (local.updated_at && (Date.now() - local.updated_at > 300000)) {
+          getKeyList().then(async (keys) => {
+            const matches = [];
+            for (const k of (keys || [])) {
+              const ids = Array.isArray(k.steamids) ? k.steamids : [];
+              const mine = ids.find((s) => String(s && (s.steamid || s)).trim() === sid64);
+              if (mine) matches.push(k);
+            }
+            if (!matches.length) {
+              await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
+            }
+          }).catch(() => {});
+        }
+        return {
+          found: true,
+          cd_key: local.cd_key,
+          key_type: local.key_type || 'STANDARD',
+          activation_date: local.activation_date || '',
+          expiry_date: exp,
+          expired: false
+        };
+      }
+    }
+  } catch (e) {
+    console.error('[suLookup] Local DB check error:', e.message);
+  }
+
+  // 2. Query remote api/view-onennabe-cdkeys if not found in local DB
+  try {
+    const keys = await getKeyList();
     const matches = [];
     for (const k of (keys || [])) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
@@ -1850,54 +1885,13 @@ async function suLookup(sid64) {
       `, [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]).catch(() => {});
       return { found: true, ...best };
     }
-
-    // Remote list does not show an active key for this SteamID yet.
-    // Check if key was activated locally in the last 5 minutes (300,000 ms grace period for upstream indexing lag).
-    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => null);
-    if (local && local.cd_key && local.updated_at && (Date.now() - local.updated_at < 300000)) {
-      const exp = String(local.expiry_date || '');
-      const isExpired = exp ? (exp < today) : false;
-      if (!isExpired) {
-        return {
-          found: true,
-          cd_key: local.cd_key,
-          key_type: local.key_type || 'STANDARD',
-          activation_date: local.activation_date || '',
-          expiry_date: exp,
-          expired: false
-        };
-      }
-    }
-
-    // Key is not in remote list and not freshly activated (<5m) -> purge local record & return not activated
-    await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
     if (matches.length) {
       const m = matches.slice().sort(suKeyCompare)[0];
       return { found: false, expired: true, ...m };
     }
-    return { found: false };
   } catch (e) {
     console.error('[suLookup] Error checking api/view-onennabe-cdkeys:', e.message);
   }
-
-  // Network fallback: check local DB if api/view-onennabe-cdkeys is unreachable
-  try {
-    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
-    if (local && local.cd_key) {
-      const exp = String(local.expiry_date || '');
-      const isExpired = exp ? (exp < today) : false;
-      if (!isExpired) {
-        return {
-          found: true,
-          cd_key: local.cd_key,
-          key_type: local.key_type || 'STANDARD',
-          activation_date: local.activation_date || '',
-          expiry_date: exp,
-          expired: false
-        };
-      }
-    }
-  } catch (err) {}
 
   return { found: false };
 }
