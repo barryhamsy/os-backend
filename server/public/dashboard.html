@@ -1368,7 +1368,7 @@ function populateGenres(genres) {
   sel.value = cur;
 }
 
-async function loadGames(page) {
+async function loadGames(page, shouldScroll = false) {
   curPage = page || 1;
   $('gamestatus').classList.remove('hide'); $('gamestatus').innerHTML='<span class="spin"></span> Loading…';
   $('games').innerHTML='';
@@ -1402,7 +1402,7 @@ async function loadGames(page) {
     $('pageinfo').textContent = 'Page ' + fmt(curPage) + ' of ' + fmt(pages);
     $('prev').disabled = curPage <= 1;
     $('next').disabled = curPage >= pages;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (shouldScroll) window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch(e){ if(e.message!=='unauth'){ $('gamestatus').textContent='Failed to load games.'; } }
 }
 
@@ -1413,7 +1413,7 @@ function switchTab(scope) {
   $('tab-mine').classList.toggle('active', scope === 'unlocked');
   // Reset genre when switching scope — the available genres differ per scope.
   curGenre = ''; $('fgenre').value = '';
-  loadGames(1);
+  loadGames(1, true);
 }
 
 async function activateKey(isPop = false) {
@@ -1437,7 +1437,11 @@ async function activateKey(isPop = false) {
     if (isSuccess) {
       st.style.color='var(--green)'; st.textContent = r.message || 'Activated! Membership is now active.';
       if (cdEl) cdEl.value='';
-      // Instantly dismiss modal and render active state locally
+      
+      // INSTANT (0ms) dismissal of pop-up modal & immediate local UI update
+      const popModal = $('membership-modal');
+      if (popModal) popModal.classList.remove('active');
+
       if (!ME) ME = {};
       ME.membership = {
         found: true,
@@ -1447,14 +1451,9 @@ async function activateKey(isPop = false) {
         expiry_date: r.expiry_date || (ME.membership && ME.membership.expiry_date) || null
       };
       renderMembership();
-      
-      // Auto close pop-up modal smoothly after successful validation
-      setTimeout(() => {
-        const popModal = $('membership-modal');
-        if (popModal) popModal.classList.remove('active');
-      }, 1000);
 
-      await refreshMe();
+      // Async background sync
+      refreshMe();
     } else {
       st.style.color='var(--red)'; st.textContent = r.message || 'Activation failed.';
     }
@@ -1463,14 +1462,17 @@ async function activateKey(isPop = false) {
 }
 
 async function refreshMe() {
+  const oldAppidsCount = unlocked ? unlocked.size : 0;
   const freshMe = await api('/dash/api/me');
   if (freshMe) {
     ME = freshMe;
     unlocked = new Set((ME.appids||[]).map(String));
     renderMembership();
+    // Only reload game grid if the set of unlocked games has changed
+    if (unlocked.size !== oldAppidsCount) {
+      loadGames(curPage, false);
+    }
   }
-  // Re-render current page to reflect unlocked state, staying where we are.
-  loadGames(curPage);
 }
 
 async function init() {
@@ -1625,8 +1627,8 @@ async function init() {
     const t = b.dataset.tag; curTags[t] = !curTags[t]; b.classList.toggle('active', curTags[t]); loadGames(1);
   }));
   $('frating').addEventListener('change', () => { curRating=Number($('frating').value)||0; applyRatingFilter(); });
-  $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curPage-1); });
-  $('next').addEventListener('click', () => loadGames(curPage+1));
+  $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curPage-1, true); });
+  $('next').addEventListener('click', () => loadGames(curPage+1, true));
 
   // Auto-refresh membership status on window focus and periodically every 30s
   window.addEventListener('focus', () => { if (ME) refreshMe(); });

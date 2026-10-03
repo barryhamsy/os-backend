@@ -966,32 +966,43 @@ const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duck
 // membership lookup was timing out (→ "NO MEMBERSHIP" / 502). Fetch at most once
 // per few minutes, dedupe concurrent misses, and serve the last good copy if the
 // upstream is slow or down so lookups keep working.
-const KEYLIST_CACHE_MS = 15 * 1000;
+const KEYLIST_CACHE_MS = 10 * 1000;
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
-async function getKeyList() {
-  const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
-  if (fresh) return keyListCache.data;
+
+async function fetchKeyListFromUpstream() {
   if (keyListCache.pending) return keyListCache.pending;
   keyListCache.pending = (async () => {
     try {
-      const vr = await fetchT(SU_VIEW_URL, {}, 30000);
+      const vr = await fetchT(SU_VIEW_URL, {}, 15000);
       const data = await vr.json().catch(() => null);
       const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
-      if (!keys) throw new Error('bad key-list payload');
-      keyListCache.data = keys;
-      keyListCache.fetchedAt = Date.now();
-      return keys;
-    } catch (err) {
-      if (keyListCache.data) {
-        console.error(`[KeyList] refresh failed, serving cached: ${err.message}`);
-        return keyListCache.data;
+      if (keys) {
+        keyListCache.data = keys;
+        keyListCache.fetchedAt = Date.now();
       }
+      return keyListCache.data;
+    } catch (err) {
+      if (keyListCache.data) return keyListCache.data;
       throw err;
     } finally {
       keyListCache.pending = null;
     }
   })();
   return keyListCache.pending;
+}
+
+async function getKeyList() {
+  const hasData = Array.isArray(keyListCache.data);
+  const isStale = !hasData || (Date.now() - keyListCache.fetchedAt > KEYLIST_CACHE_MS);
+  if (isStale) {
+    if (!hasData) {
+      return await fetchKeyListFromUpstream();
+    } else {
+      fetchKeyListFromUpstream().catch(() => {});
+      return keyListCache.data;
+    }
+  }
+  return keyListCache.data;
 }
 
 function suTodayStr() {
