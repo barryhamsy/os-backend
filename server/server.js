@@ -966,7 +966,7 @@ const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duck
 // membership lookup was timing out (→ "NO MEMBERSHIP" / 502). Fetch at most once
 // per few minutes, dedupe concurrent misses, and serve the last good copy if the
 // upstream is slow or down so lookups keep working.
-const KEYLIST_CACHE_MS = 10 * 60 * 1000;
+const KEYLIST_CACHE_MS = 15 * 1000;
 let keyListCache = { data: null, fetchedAt: 0, pending: null };
 async function getKeyList() {
   const fresh = keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
@@ -1225,13 +1225,15 @@ app.post('/api/keys/:cdkey/revoke', authenticateToken, async (req, res) => {
           `Refund: revoked ${keyRecord.status === 'used' ? 'activated' : 'unused'} key ${cdkey}`]);
     }
 
-    const github = await deleteKeyFromGitHub(cdkey);
+    keyListCache.fetchedAt = 0;
+    await db.run('DELETE FROM user_memberships WHERE cd_key = ?', [cdkey]).catch(() => {});
 
     // If this key had been activated, recompute that SteamID's entitlements so
     // the revoked AppID(s) drop out of users/<steamid>.json — unless another of
     // the customer's still-valid keys also grants them.
     let entitlements = null;
     if (keyRecord.activated_by) {
+      await db.run('DELETE FROM user_memberships WHERE steamid = ?', [toSteamId64(keyRecord.activated_by)]).catch(() => {});
       entitlements = await syncUserEntitlements(keyRecord.activated_by);
     }
 
@@ -1833,7 +1835,50 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Check local SQLite DB first (instant & 100% reliable for activated accounts)
+  // 1. Check upstream view-onennabe-cdkeys (source of truth for active & revoked keys)
+  try {
+    const keys = await getKeyList(); // cached for 15s; invalidated on activation/revocation
+    const matches = [];
+    for (const k of keys) {
+      const ids = Array.isArray(k.steamids) ? k.steamids : [];
+      const mine = ids.find((s) => String(s && (s.steamid || s)).trim() === sid64);
+      if (!mine) continue;
+      const exp = String(k.expiry_date || '');
+      matches.push({
+        cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '',
+        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
+        expired: exp ? (exp < today) : false,
+      });
+    }
+    const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
+    if (active.length) {
+      const best = active[0];
+      // Save/update active key in local DB for offline network fallback
+      db.run(
+        `INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(steamid) DO UPDATE SET
+           cd_key=excluded.cd_key, key_type=excluded.key_type, activation_date=excluded.activation_date,
+           expiry_date=excluded.expiry_date, updated_at=excluded.updated_at`,
+        [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]
+      ).catch(() => {});
+      return { found: true, ...best };
+    }
+
+    // No active key found in upstream list -> key was revoked or non-existent.
+    // Clear stale cached membership row from local DB immediately.
+    db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
+
+    if (matches.length) {
+      const m = matches.slice().sort(suKeyCompare)[0];
+      return { found: false, expired: true, ...m };
+    }
+    return { found: false };
+  } catch (e) {
+    console.warn(`[suLookup] Upstream key list check failed (${e.message}), checking local DB fallback for ${sid64}`);
+  }
+
+  // 2. Fallback: Check local SQLite DB if upstream key list is temporarily unreachable
   try {
     const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
     if (local && local.cd_key) {
@@ -1851,44 +1896,7 @@ async function suLookup(sid64) {
       }
     }
   } catch (e) {
-    console.error('[suLookup] DB lookup error:', e.message);
-  }
-
-  // 2. Fallback / check upstream view-onennabe-cdkeys
-  try {
-    const keys = await getKeyList(); // cached; served stale if the upstream is slow
-    const matches = [];
-    for (const k of keys) {
-      const ids = Array.isArray(k.steamids) ? k.steamids : [];
-      const mine = ids.find((s) => String(s && (s.steamid || s)).trim() === sid64);
-      if (!mine) continue;
-      const exp = String(k.expiry_date || '');
-      matches.push({
-        cd_key: k.cd_key, expiry_date: exp, key_type: k.key_type || '',
-        activation_date: String((mine && mine.activation_date) || k.activation_date || ''),
-        expired: exp ? (exp < today) : false,
-      });
-    }
-    const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
-    if (active.length) {
-      const best = active[0];
-      // Cache best active key in local DB for fast future lookups
-      db.run(
-        `INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(steamid) DO UPDATE SET
-           cd_key=excluded.cd_key, key_type=excluded.key_type, activation_date=excluded.activation_date,
-           expiry_date=excluded.expiry_date, updated_at=excluded.updated_at`,
-        [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]
-      ).catch(() => {});
-      return { found: true, ...best };
-    }
-    if (matches.length) {
-      const m = matches.slice().sort(suKeyCompare)[0];
-      return { found: false, expired: true, ...m };
-    }
-  } catch (e) {
-    console.error('[suLookup] getKeyList error:', e.message);
+    console.error('[suLookup] Local DB fallback error:', e.message);
   }
 
   return { found: false };
