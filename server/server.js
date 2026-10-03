@@ -904,11 +904,38 @@ app.post('/api/github/webhook', (req, res) => {
 
 const ONENNABE_DB_PATH = process.env.ONENNABE_DB_PATH || 'G:/steamunlockonennabe/onennabe.db';
 
+function getOnennabeDbPath() {
+  if (process.env.ONENNABE_DB_PATH && fs.existsSync(process.env.ONENNABE_DB_PATH)) {
+    return process.env.ONENNABE_DB_PATH;
+  }
+  const os = require('os');
+  const path = require('path');
+  const candidates = [
+    'G:/steamunlockonennabe/onennabe.db',
+    '/home/barryhamsy/steamunlockonennabe/onennabe.db',
+    '/home/steamunlockonennabe/onennabe.db',
+    '/var/www/steamunlockonennabe/onennabe.db',
+    '/opt/steamunlockonennabe/onennabe.db',
+    path.join(__dirname, '../../steamunlockonennabe/onennabe.db'),
+    path.join(__dirname, '../steamunlockonennabe/onennabe.db'),
+    path.join(process.cwd(), '../steamunlockonennabe/onennabe.db'),
+    path.join(process.cwd(), '../../steamunlockonennabe/onennabe.db'),
+    path.join(os.homedir(), 'steamunlockonennabe/onennabe.db'),
+  ];
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch (_) {}
+  }
+  return process.env.ONENNABE_DB_PATH || 'G:/steamunlockonennabe/onennabe.db';
+}
+
 async function suLookupDbDirect(sid64) {
-  if (!fs.existsSync(ONENNABE_DB_PATH)) return null;
+  const dbPath = getOnennabeDbPath();
+  if (!fs.existsSync(dbPath)) return null;
   return new Promise((resolve) => {
     const sqlite3 = require('sqlite3');
-    const sdb = new sqlite3.Database(ONENNABE_DB_PATH, sqlite3.OPEN_READONLY, (err) => {
+    const sdb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
       if (err) return resolve(null);
     });
     const sql = `
@@ -926,13 +953,14 @@ async function suLookupDbDirect(sid64) {
 }
 
 async function suValidateDbDirect(cd, sid64) {
-  if (!fs.existsSync(ONENNABE_DB_PATH)) return null;
+  const dbPath = getOnennabeDbPath();
+  if (!fs.existsSync(dbPath)) return null;
   const cdUpper = String(cd || '').trim().toUpperCase();
   if (!cdUpper || !sid64) return null;
 
   return new Promise((resolve) => {
     const sqlite3 = require('sqlite3');
-    const sdb = new sqlite3.Database(ONENNABE_DB_PATH, sqlite3.OPEN_READWRITE, (err) => {
+    const sdb = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
       if (err) return resolve(null);
     });
 
@@ -1040,14 +1068,14 @@ async function suValidate(cd, sid) {
       }
 
       // Non-blocking background call to HTTP server if configured
-      fetchT(SU_VALIDATE_URL, {
+      fetchT('http://127.0.0.1:5000/validate-onennabe-cdkey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cd_key: cdUpper, cdkey: cdUpper,
           steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
         }),
-      }, 5000).catch(() => {});
+      }, 3000).catch(() => {});
 
       return directRes;
     }
@@ -1056,15 +1084,24 @@ async function suValidate(cd, sid) {
   }
 
   // Fallback to HTTP API query if direct DB file not accessible
-  const vr = await fetchT(SU_VALIDATE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      cd_key: cdUpper, cdkey: cdUpper,
-      steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
-    }),
-  }, 45000);
-  const res = await vr.json().catch(() => null);
+  let vr = null;
+  try {
+    vr = await fetchT('http://127.0.0.1:5000/validate-onennabe-cdkey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cd_key: cdUpper, cdkey: cdUpper, steamid: sid64, steamid64: sid64 }),
+    }, 5000);
+  } catch (_) {
+    try {
+      vr = await fetchT(SU_VALIDATE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cd_key: cdUpper, cdkey: cdUpper, steamid: sid64, steamid64: sid64 }),
+      }, 10000);
+    } catch (_) {}
+  }
+
+  const res = vr ? await vr.json().catch(() => null) : null;
   keyListCache.fetchedAt = 0;
 
   if (res && (res.status === 'success' || res.activated || res.success || (res.message && String(res.message).toLowerCase().includes('validated')) || (res.message && String(res.message).toLowerCase().includes('success')))) {
@@ -1077,9 +1114,12 @@ async function suValidate(cd, sid) {
         VALUES (?, ?, ?, ?, ?, ?)
       `, [sid64, cdUpper, kt, ad, ed, Date.now()]).catch((err) => console.error('[user_memberships] db save error:', err.message));
     }
+    return res;
   }
 
-  return res;
+  if (res) return res;
+
+  return { status: 'error', message: 'Could not connect to activation server. Please check the CD Key and try again.' };
 }
 
 async function getKeyListFromDbFile() {
