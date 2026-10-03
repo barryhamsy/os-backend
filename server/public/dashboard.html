@@ -1465,9 +1465,6 @@ async function refreshMe() {
   const oldAppidsCount = unlocked ? unlocked.size : 0;
   const freshMe = await api('/dash/api/me');
   if (freshMe) {
-    if (ME && ME.membership && ME.membership.found && freshMe.membership && !freshMe.membership.found) {
-      freshMe.membership = ME.membership;
-    }
     ME = freshMe;
     unlocked = new Set((ME.appids||[]).map(String));
     renderMembership();
