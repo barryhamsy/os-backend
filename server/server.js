@@ -902,26 +902,170 @@ app.post('/api/github/webhook', (req, res) => {
   res.json({ ok: true, epoch: _manifestEpoch, message: 'Manifest epoch bumped via GitHub webhook' });
 });
 
-// Steam Unlock membership. Validation lives at steamunlockonennabe; the plugin's
-// Lua backend can only reliably send GET query params (not POST bodies), so these
-// are GET endpoints and os-backend does the proper server-to-server POST.
-const SU_VALIDATE_URL = process.env.SU_VALIDATE_URL || 'https://steamunlockonennabe.duckdns.org/validate-onennabe-cdkey';
+const ONENNABE_DB_PATH = process.env.ONENNABE_DB_PATH || 'G:/steamunlockonennabe/onennabe.db';
+
+async function suLookupDbDirect(sid64) {
+  if (!fs.existsSync(ONENNABE_DB_PATH)) return null;
+  return new Promise((resolve) => {
+    const sqlite3 = require('sqlite3');
+    const sdb = new sqlite3.Database(ONENNABE_DB_PATH, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return resolve(null);
+    });
+    const sql = `
+      SELECT k.cd_key, k.key_type, k.activation_date, k.expiry_date, s.activation_date AS link_activation_date
+      FROM cdkey_steamids s
+      JOIN cd_keys k ON s.cd_key = k.cd_key
+      WHERE s.steamid = ?
+    `;
+    sdb.all(sql, [sid64], (err, rows) => {
+      sdb.close();
+      if (err || !Array.isArray(rows)) return resolve(null);
+      resolve(rows);
+    });
+  });
+}
+
+async function suValidateDbDirect(cd, sid64) {
+  if (!fs.existsSync(ONENNABE_DB_PATH)) return null;
+  const cdUpper = String(cd || '').trim().toUpperCase();
+  if (!cdUpper || !sid64) return null;
+
+  return new Promise((resolve) => {
+    const sqlite3 = require('sqlite3');
+    const sdb = new sqlite3.Database(ONENNABE_DB_PATH, sqlite3.OPEN_READWRITE, (err) => {
+      if (err) return resolve(null);
+    });
+
+    sdb.get('SELECT key_type, activation_date, expiry_date, used_count FROM cd_keys WHERE UPPER(cd_key) = ?', [cdUpper], (err, row) => {
+      if (err || !row) {
+        sdb.close();
+        return resolve({ status: 'error', message: 'Invalid CD Key' });
+      }
+
+      const keyType = row.key_type || 'STANDARD';
+      let actDate = row.activation_date || null;
+      let expDate = row.expiry_date || null;
+      let usedCount = row.used_count || 0;
+      const today = suTodayStr();
+
+      sdb.all('SELECT steamid FROM cdkey_steamids WHERE UPPER(cd_key) = ?', [cdUpper], (err2, steamRows) => {
+        if (err2) { sdb.close(); return resolve(null); }
+        const linkedSteamids = (steamRows || []).map((s) => s.steamid);
+        const isLinked = linkedSteamids.includes(sid64);
+
+        const kt = keyType.toUpperCase();
+        if (kt === 'STANDARD' || kt === 'BASIC') {
+          if (linkedSteamids.length > 0 && !isLinked) {
+            sdb.close();
+            return resolve({ status: 'error', message: 'This STANDARD CD Key is permanently linked to another Steam account.' });
+          }
+        } else if (kt === 'DUO') {
+          if (linkedSteamids.length >= 2 && !isLinked) {
+            sdb.close();
+            return resolve({ status: 'error', message: 'This DUO CD Key is already linked to two Steam accounts.' });
+          }
+        } else if (kt === 'PREMIUM') {
+          if (linkedSteamids.length >= 3 && !isLinked) {
+            sdb.close();
+            return resolve({ status: 'error', message: 'This PREMIUM CD Key is already linked to three Steam accounts.' });
+          }
+        } else if (kt === 'MONTHLY' || kt === '1DAY' || kt === '3MONTHS' || kt === '6MONTHS' || kt === '1YEAR' || kt === 'TRIAL') {
+          if (linkedSteamids.length > 0 && !isLinked) {
+            sdb.close();
+            return resolve({ status: 'error', message: `This ${kt} CD Key is permanently linked to another Steam account.` });
+          }
+
+          if (!actDate) actDate = today;
+          if (!expDate) {
+            const now = new Date();
+            let addDays = 30;
+            if (kt === '1DAY') addDays = 1;
+            else if (kt === '3MONTHS') addDays = 90;
+            else if (kt === '6MONTHS') addDays = 180;
+            else if (kt === '1YEAR') addDays = 365;
+            const expTime = new Date(now.getTime() + addDays * 86400000);
+            expDate = expTime.toISOString().slice(0, 10);
+          }
+
+          if (expDate && expDate < today) {
+            sdb.close();
+            return resolve({ status: 'error', message: `This ${kt} CD Key has expired. Please renew your subscription.` });
+          }
+        }
+
+        sdb.serialize(() => {
+          if (!isLinked) {
+            sdb.run('INSERT OR IGNORE INTO cdkey_steamids (cd_key, steamid, activation_date) VALUES (?, ?, ?)', [cdUpper, sid64, today]);
+            sdb.run('UPDATE cd_keys SET used_count = used_count + 1, activation_date = COALESCE(activation_date, ?), expiry_date = COALESCE(expiry_date, ?) WHERE UPPER(cd_key) = ?', [today, expDate, cdUpper]);
+          } else {
+            sdb.run('UPDATE cd_keys SET used_count = used_count + 1 WHERE UPPER(cd_key) = ?', [cdUpper]);
+          }
+          sdb.close(() => {
+            resolve({
+              status: 'success',
+              message: 'CD Key validated successfully',
+              key_type: keyType,
+              activation_date: actDate || today,
+              expiry_date: expDate,
+              steamid: sid64,
+              used_count: usedCount + 1
+            });
+          });
+        });
+      });
+    });
+  });
+}
 
 // Server-to-server: ask steamunlockonennabe whether a CD key is valid. It needs
 // both the CD key and the SteamID; we send field-name aliases so it matches
 // whichever the endpoint reads (cd_key/steamid — SteamID as 64-bit).
 async function suValidate(cd, sid) {
   const sid64 = sid ? toSteamId64(String(sid)) : '';
+  const cdUpper = String(cd || '').trim().toUpperCase();
+  if (!cdUpper) return { status: 'error', message: 'CD key required' };
+
+  // 1. Direct SQLite local database validation (1ms latency!)
+  try {
+    const directRes = await suValidateDbDirect(cdUpper, sid64);
+    if (directRes) {
+      if (directRes.status === 'success' && sid64) {
+        const kt = directRes.key_type || 'STANDARD';
+        const ad = directRes.activation_date || suTodayStr();
+        const ed = directRes.expiry_date || null;
+        await db.run(`
+          INSERT OR REPLACE INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [sid64, cdUpper, kt, ad, ed, Date.now()]).catch((err) => console.error('[user_memberships] db save error:', err.message));
+      }
+
+      // Non-blocking background call to HTTP server if configured
+      fetchT(SU_VALIDATE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cd_key: cdUpper, cdkey: cdUpper,
+          steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
+        }),
+      }, 5000).catch(() => {});
+
+      return directRes;
+    }
+  } catch (e) {
+    console.error('[suValidate] Direct DB validation error:', e.message);
+  }
+
+  // Fallback to HTTP API query if direct DB file not accessible
   const vr = await fetchT(SU_VALIDATE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      cd_key: cd, cdkey: cd,
+      cd_key: cdUpper, cdkey: cdUpper,
       steamid: sid64, steamid64: sid64, steam_id: sid64, steamID: sid64,
     }),
-  }, 45000); // key binding is a write — allow up to 45s for slow upstream server
+  }, 45000);
   const res = await vr.json().catch(() => null);
-  keyListCache.fetchedAt = 0; // invalidate cache so suLookup sees fresh view-onennabe-cdkeys immediately
+  keyListCache.fetchedAt = 0;
 
   if (res && (res.status === 'success' || res.activated || res.success || (res.message && String(res.message).toLowerCase().includes('validated')) || (res.message && String(res.message).toLowerCase().includes('success')))) {
     if (sid64) {
@@ -931,22 +1075,61 @@ async function suValidate(cd, sid) {
       await db.run(`
         INSERT OR REPLACE INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-      `, [sid64, cd, kt, ad, ed, Date.now()]).catch((err) => console.error('[user_memberships] db save error:', err.message));
+      `, [sid64, cdUpper, kt, ad, ed, Date.now()]).catch((err) => console.error('[user_memberships] db save error:', err.message));
     }
   }
 
   return res;
 }
 
-// Full key list (server-side only). Used to look up an existing user's own key
-// for one-click re-activation. We NEVER expose this whole list to a client — the
-// lookup endpoint below returns only the requesting SteamID's own key.
-const SU_VIEW_URL = process.env.SU_VIEW_URL || 'https://steamunlockonennabe.duckdns.org/api/view-onennabe-cdkeys';
-
-const KEYLIST_CACHE_MS = 2 * 1000;
-let keyListCache = { data: null, fetchedAt: 0, pending: null };
+async function getKeyListFromDbFile() {
+  if (!fs.existsSync(ONENNABE_DB_PATH)) return null;
+  return new Promise((resolve) => {
+    const sqlite3 = require('sqlite3');
+    const sdb = new sqlite3.Database(ONENNABE_DB_PATH, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return resolve(null);
+    });
+    const sql = `
+      SELECT k.cd_key, k.key_type, k.activation_date, k.expiry_date, s.steamid
+      FROM cd_keys k
+      JOIN cdkey_steamids s ON k.cd_key = s.cd_key
+    `;
+    sdb.all(sql, [], (err, rows) => {
+      sdb.close();
+      if (err || !Array.isArray(rows)) return resolve(null);
+      // Group by cd_key into format expected by suLookup ({ cd_key, key_type, expiry_date, steamids: [{ steamid, activation_date }] })
+      const keyMap = new Map();
+      for (const r of rows) {
+        if (!keyMap.has(r.cd_key)) {
+          keyMap.set(r.cd_key, {
+            cd_key: r.cd_key,
+            key_type: r.key_type,
+            activation_date: r.activation_date,
+            expiry_date: r.expiry_date,
+            steamids: []
+          });
+        }
+        keyMap.get(r.cd_key).steamids.push({ steamid: r.steamid, activation_date: r.activation_date });
+      }
+      resolve([...keyMap.values()]);
+    });
+  });
+}
 
 async function getKeyList(forceFresh = false) {
+  // Try reading local SQLite file directly first (0ms latency!)
+  try {
+    const dbKeys = await getKeyListFromDbFile();
+    if (dbKeys) {
+      keyListCache.data = dbKeys;
+      keyListCache.fetchedAt = Date.now();
+      return dbKeys;
+    }
+  } catch (e) {
+    console.error('[getKeyList] Error reading onennabe.db file directly:', e.message);
+  }
+
+  // Fallback to HTTP API query if file not accessible
   if (forceFresh) keyListCache.fetchedAt = 0;
   const fresh = !forceFresh && keyListCache.data && (Date.now() - keyListCache.fetchedAt < KEYLIST_CACHE_MS);
   if (fresh) return keyListCache.data;
@@ -1811,26 +1994,53 @@ async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Instant local DB cache check (0.1ms). Primary source of truth for active memberships.
+  // 1. Instant direct read from local onennabe.db ground truth (1ms)
+  try {
+    const rows = await suLookupDbDirect(sid64);
+    if (rows !== null) {
+      const matches = rows.map((r) => {
+        const exp = String(r.expiry_date || '');
+        return {
+          cd_key: r.cd_key,
+          key_type: r.key_type || 'STANDARD',
+          activation_date: String(r.link_activation_date || r.activation_date || ''),
+          expiry_date: exp,
+          expired: exp ? (exp < today) : false
+        };
+      });
+
+      const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
+      if (active.length) {
+        const best = active[0];
+        await db.run(`
+          INSERT OR REPLACE INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [sid64, best.cd_key, best.key_type, best.activation_date, best.expiry_date, Date.now()]).catch(() => {});
+        return { found: true, ...best };
+      }
+
+      // If no active matches found for this SteamID in onennabe.db (e.g. revoked key),
+      // purge any stale user_memberships row IMMEDIATELY so non-activated state is shown!
+      await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
+
+      if (matches.length) {
+        const m = matches.slice().sort(suKeyCompare)[0];
+        return { found: false, expired: true, ...m };
+      }
+
+      return { found: false };
+    }
+  } catch (e) {
+    console.error('[suLookup] Direct DB lookup error:', e.message);
+  }
+
+  // 2. Fallback to local DB cache check if onennabe.db file read fails
   try {
     const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
     if (local && local.cd_key) {
       const exp = String(local.expiry_date || '');
       const isExpired = exp ? (exp < today) : false;
       if (!isExpired) {
-        // Non-blocking background sync with remote api/view-onennabe-cdkeys to catch remote revocations
-        getKeyList().then(async (keys) => {
-          const matches = [];
-          for (const k of (keys || [])) {
-            const ids = Array.isArray(k.steamids) ? k.steamids : [];
-            const mine = ids.find((s) => String(s && (s.steamid || s)).trim() === sid64);
-            if (mine) matches.push(k);
-          }
-          if (!matches.length) {
-            await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
-          }
-        }).catch(() => {});
-
         return {
           found: true,
           cd_key: local.cd_key,
@@ -1841,11 +2051,9 @@ async function suLookup(sid64) {
         };
       }
     }
-  } catch (e) {
-    console.error('[suLookup] Local DB check error:', e.message);
-  }
+  } catch (e) {}
 
-  // 2. Query remote api/view-onennabe-cdkeys directly if not in local DB
+  // 3. Fallback to remote API if everything else fails
   try {
     const keys = await getKeyList();
     const matches = [];
@@ -1876,9 +2084,7 @@ async function suLookup(sid64) {
       const m = matches.slice().sort(suKeyCompare)[0];
       return { found: false, expired: true, ...m };
     }
-  } catch (e) {
-    console.error('[suLookup] Error checking api/view-onennabe-cdkeys:', e.message);
-  }
+  } catch (e) {}
 
   return { found: false };
 }
