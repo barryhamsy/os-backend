@@ -48,18 +48,31 @@ db.run(`CREATE TABLE IF NOT EXISTS user_memberships (
   updated_at INTEGER
 )`).catch((e) => console.error('[user_memberships] init failed:', e.message));
 
+const _entitlementsVersionCache = new Map();
+const _entitlementsCache = new Map();
+
+function invalidateEntitlementsCache(sid) {
+  if (!sid) return;
+  const s = String(sid);
+  _entitlementsVersionCache.delete(s);
+  _entitlementsCache.delete(s);
+}
+
 async function dbGetUnlocks(sid) {
   const rows = await db.all('SELECT appid FROM member_unlocks WHERE steamid = ?', [String(sid)]);
   return rows.map((r) => String(r.appid));
 }
 async function dbAddUnlock(sid, appid) {
+  invalidateEntitlementsCache(sid);
   await db.run('INSERT OR IGNORE INTO member_unlocks (steamid, appid, added_at) VALUES (?,?,?)',
     [String(sid), String(appid), Date.now()]);
 }
 async function dbAddUnlocks(sid, appids) {
+  invalidateEntitlementsCache(sid);
   for (const a of appids) await dbAddUnlock(sid, a);
 }
 async function dbRemoveUnlock(sid, appid) {
+  invalidateEntitlementsCache(sid);
   await db.run('DELETE FROM member_unlocks WHERE steamid = ? AND appid = ?', [String(sid), String(appid)]);
 }
 
@@ -808,6 +821,11 @@ function toSteamId64(id) {
 app.get('/api/entitlements/:steamid', async (req, res) => {
   try {
     let id = String(req.params.steamid).trim();
+    const cached = _entitlementsCache.get(id);
+    if (cached && (Date.now() - cached.time < 2000)) {
+      return res.json(cached.data);
+    }
+
     const candidates = new Set([id]);
     try {
       const n = BigInt(id);
@@ -824,7 +842,9 @@ app.get('/api/entitlements/:steamid', async (req, res) => {
     for (const a of await readUsersJsonAppids(toSteamId64(id))) set.add(String(a));
 
     const appids = [...set].sort((a, b) => Number(a) - Number(b));
-    res.json({ steamid: id, appids: appids.map(Number) });
+    const outData = { steamid: id, appids: appids.map(Number) };
+    _entitlementsCache.set(id, { data: outData, time: Date.now() });
+    res.json(outData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -845,6 +865,12 @@ let _manifestEpoch = 0;
 app.get('/api/entitlements-version/:steamid', async (req, res) => {
   try {
     let id = String(req.params.steamid).trim();
+    const cached = _entitlementsVersionCache.get(id);
+    if (cached && (Date.now() - cached.time < 1500) && cached.epoch === _manifestEpoch) {
+      res.set('Cache-Control', 'no-store');
+      return res.json({ v: cached.v });
+    }
+
     const candidates = new Set([id]);
     try {
       const n = BigInt(id);
@@ -866,6 +892,7 @@ app.get('/api/entitlements-version/:steamid', async (req, res) => {
     ).catch(() => ({ n: 0, mx: 0 }));
 
     const v = `${krow.n}:${krow.mx}:${mrow.n}:${mrow.mx}:${_manifestEpoch}`;
+    _entitlementsVersionCache.set(id, { v, time: Date.now(), epoch: _manifestEpoch });
     res.set('Cache-Control', 'no-store');
     res.json({ v });
   } catch (err) {
