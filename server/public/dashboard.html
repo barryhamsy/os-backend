@@ -746,7 +746,7 @@ async function api(path, opts = {}) {
   const t = setTimeout(() => ac.abort(), timeoutMs);
   let r;
   try {
-    r = await fetch(path, Object.assign({ signal: ac.signal, headers: { 'Content-Type': 'application/json' } }, opts));
+    r = await fetch(path, Object.assign({ signal: ac.signal, cache: 'no-store', headers: { 'Content-Type': 'application/json' } }, opts));
   } catch (err) {
     if (err.name === 'AbortError' || (err.message && err.message.includes('aborted'))) {
       throw new Error('Request timed out. Please try again.');
@@ -1627,6 +1627,10 @@ async function init() {
   $('frating').addEventListener('change', () => { curRating=Number($('frating').value)||0; applyRatingFilter(); });
   $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curPage-1); });
   $('next').addEventListener('click', () => loadGames(curPage+1));
+
+  // Auto-refresh membership status on window focus and periodically every 30s
+  window.addEventListener('focus', () => { if (ME) refreshMe(); });
+  setInterval(() => { if (ME) refreshMe(); }, 30000);
 }
 init();
 </script>

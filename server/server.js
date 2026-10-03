@@ -1947,6 +1947,7 @@ async function fetchSteamProfile(sid) {
 // ── Dashboard API (session-authenticated) ─────────────────────────────────────
 // Who am I + membership + my unlocked games + persona name & avatar.
 app.get('/dash/api/me', requireSteam, async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   try {
     const sid = toSteamId64(req.steamid);
     const [mem, appids, profile] = await Promise.all([
