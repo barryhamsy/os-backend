@@ -1123,10 +1123,11 @@ async function suValidate(cd, sid) {
 }
 
 async function getKeyListFromDbFile() {
-  if (!fs.existsSync(ONENNABE_DB_PATH)) return null;
+  const dbPath = getOnennabeDbPath();
+  if (!fs.existsSync(dbPath)) return null;
   return new Promise((resolve) => {
     const sqlite3 = require('sqlite3');
-    const sdb = new sqlite3.Database(ONENNABE_DB_PATH, sqlite3.OPEN_READONLY, (err) => {
+    const sdb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
       if (err) return resolve(null);
     });
     const sql = `
@@ -1176,6 +1177,9 @@ async function getKeyList(forceFresh = false) {
   if (keyListCache.pending) return keyListCache.pending;
   keyListCache.pending = (async () => {
     try {
+      if (typeof SU_VIEW_URL === 'undefined' || !SU_VIEW_URL) {
+        throw new Error('SU_VIEW_URL is not configured');
+      }
       const vr = await fetchT(SU_VIEW_URL, { headers: { 'Cache-Control': 'no-cache, no-store' } }, 15000);
       const data = await vr.json().catch(() => null);
       const keys = (data && Array.isArray(data.keys)) ? data.keys : null;
@@ -1184,8 +1188,10 @@ async function getKeyList(forceFresh = false) {
       keyListCache.fetchedAt = Date.now();
       return keys;
     } catch (err) {
+      // Set backoff timestamp so failed requests aren't re-attempted on every request tick
+      keyListCache.fetchedAt = Date.now();
       if (keyListCache.data) return keyListCache.data;
-      throw err;
+      return [];
     } finally {
       keyListCache.pending = null;
     }
