@@ -1831,13 +1831,63 @@ app.get('/auth/steam/return', async (req, res) => {
 app.get('/auth/logout', (req, res) => { clearSteamSession(res); res.redirect('/dashboard'); });
 
 // ── Membership lookup helper (shared) ─────────────────────────────────────────
+// ── Membership lookup helper (shared) ─────────────────────────────────────────
 async function suLookup(sid64) {
   if (!sid64) return { found: false };
   const today = suTodayStr();
 
-  // 1. Check upstream view-onennabe-cdkeys (source of truth for active & revoked keys)
+  let keys = null;
   try {
-    const keys = await getKeyList(); // cached for 15s; invalidated on activation/revocation
+    keys = await getKeyList();
+  } catch (e) {
+    console.warn(`[suLookup] Upstream key list check failed (${e.message}), will reliance on local DB fallback for ${sid64}`);
+  }
+
+  // 1. Check local SQLite DB first (instant membership recognition after activation)
+  try {
+    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
+    if (local && local.cd_key) {
+      const exp = local.expiry_date ? String(local.expiry_date) : '';
+      const expired = exp ? (exp < today) : false;
+      if (!expired) {
+        if (keys && Array.isArray(keys)) {
+          const lKeyUpper = String(local.cd_key).trim().toUpperCase();
+          const keyExistsInUpstream = keys.some(k =>
+            String(k.cd_key || k.cdkey || '').trim().toUpperCase() === lKeyUpper
+          );
+          if (keyExistsInUpstream) {
+            return {
+              found: true,
+              cd_key: local.cd_key,
+              key_type: local.key_type || 'STANDARD',
+              activation_date: local.activation_date || '',
+              expiry_date: exp || null,
+              expired: false,
+            };
+          } else {
+            // Key was revoked upstream! Delete stale local membership row.
+            console.log(`[suLookup] Local key ${local.cd_key} for ${sid64} was revoked upstream. Clearing DB.`);
+            await db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]);
+          }
+        } else {
+          // Upstream unreachable: trust local DB as offline fallback
+          return {
+            found: true,
+            cd_key: local.cd_key,
+            key_type: local.key_type || 'STANDARD',
+            activation_date: local.activation_date || '',
+            expiry_date: exp || null,
+            expired: false,
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[suLookup] DB lookup error:', e.message);
+  }
+
+  // 2. Check upstream view-onennabe-cdkeys for any key matching sid64
+  if (keys && Array.isArray(keys)) {
     const matches = [];
     for (const k of keys) {
       const ids = Array.isArray(k.steamids) ? k.steamids : [];
@@ -1853,7 +1903,7 @@ async function suLookup(sid64) {
     const active = matches.filter((m) => !m.expired).sort(suKeyCompare);
     if (active.length) {
       const best = active[0];
-      // Save/update active key in local DB for offline network fallback
+      // Save best active key to local DB for instant subsequent lookups
       db.run(
         `INSERT INTO user_memberships (steamid, cd_key, key_type, activation_date, expiry_date, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -1864,39 +1914,10 @@ async function suLookup(sid64) {
       ).catch(() => {});
       return { found: true, ...best };
     }
-
-    // No active key found in upstream list -> key was revoked or non-existent.
-    // Clear stale cached membership row from local DB immediately.
-    db.run('DELETE FROM user_memberships WHERE steamid = ?', [sid64]).catch(() => {});
-
     if (matches.length) {
       const m = matches.slice().sort(suKeyCompare)[0];
       return { found: false, expired: true, ...m };
     }
-    return { found: false };
-  } catch (e) {
-    console.warn(`[suLookup] Upstream key list check failed (${e.message}), checking local DB fallback for ${sid64}`);
-  }
-
-  // 2. Fallback: Check local SQLite DB if upstream key list is temporarily unreachable
-  try {
-    const local = await db.get('SELECT * FROM user_memberships WHERE steamid = ?', [sid64]);
-    if (local && local.cd_key) {
-      const exp = local.expiry_date ? String(local.expiry_date) : '';
-      const expired = exp ? (exp < today) : false;
-      if (!expired) {
-        return {
-          found: true,
-          cd_key: local.cd_key,
-          key_type: local.key_type || 'STANDARD',
-          activation_date: local.activation_date || '',
-          expiry_date: exp || null,
-          expired: false,
-        };
-      }
-    }
-  } catch (e) {
-    console.error('[suLookup] Local DB fallback error:', e.message);
   }
 
   return { found: false };
