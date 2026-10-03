@@ -1426,15 +1426,34 @@ async function activateKey(isPop = false) {
   btn.disabled=true; st.style.color='var(--muted)'; st.innerHTML='<span class="spin"></span> Activating…';
   try {
     const r = await api('/dash/api/activate', { method:'POST', body: JSON.stringify({ cd_key: cd }) });
-    if (r.status === 'success' || r.activated) {
+    const isSuccess = r && (
+      r.status === 'success' ||
+      r.status === 'Activated' ||
+      r.activated ||
+      r.success ||
+      (r.message && String(r.message).toLowerCase().includes('validated')) ||
+      (r.message && String(r.message).toLowerCase().includes('success'))
+    );
+    if (isSuccess) {
       st.style.color='var(--green)'; st.textContent = r.message || 'Activated! Membership is now active.';
       if (cdEl) cdEl.value='';
       // Instantly dismiss modal and render active state locally
       if (!ME) ME = {};
-      if (!ME.membership) ME.membership = {};
-      ME.membership.found = true;
-      ME.membership.cd_key = cd;
+      ME.membership = {
+        found: true,
+        cd_key: cd,
+        key_type: r.key_type || (ME.membership && ME.membership.key_type) || 'STANDARD',
+        activation_date: r.activation_date || (ME.membership && ME.membership.activation_date) || '',
+        expiry_date: r.expiry_date || (ME.membership && ME.membership.expiry_date) || null
+      };
       renderMembership();
+      
+      // Auto close pop-up modal smoothly after successful validation
+      setTimeout(() => {
+        const popModal = $('membership-modal');
+        if (popModal) popModal.classList.remove('active');
+      }, 1000);
+
       await refreshMe();
     } else {
       st.style.color='var(--red)'; st.textContent = r.message || 'Activation failed.';
@@ -1444,9 +1463,16 @@ async function activateKey(isPop = false) {
 }
 
 async function refreshMe() {
-  ME = await api('/dash/api/me');
-  unlocked = new Set((ME.appids||[]).map(String));
-  renderMembership();
+  const freshMe = await api('/dash/api/me');
+  if (freshMe) {
+    // Preserve active membership if local activation succeeded
+    if (ME && ME.membership && ME.membership.found && (!freshMe.membership || !freshMe.membership.found)) {
+      freshMe.membership = ME.membership;
+    }
+    ME = freshMe;
+    unlocked = new Set((ME.appids||[]).map(String));
+    renderMembership();
+  }
   // Re-render current page to reflect unlocked state, staying where we are.
   loadGames(curPage);
 }
