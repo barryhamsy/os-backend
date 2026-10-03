@@ -1629,10 +1629,6 @@ async function init() {
   $('frating').addEventListener('change', () => { curRating=Number($('frating').value)||0; applyRatingFilter(); });
   $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curPage-1, true); });
   $('next').addEventListener('click', () => loadGames(curPage+1, true));
-
-  // Auto-refresh membership status on window focus and periodically every 30s
-  window.addEventListener('focus', () => { if (ME) refreshMe(); });
-  setInterval(() => { if (ME) refreshMe(); }, 30000);
 }
 init();
 </script>
