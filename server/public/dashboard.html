@@ -673,14 +673,23 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 
   <!-- Support/Donate Modal -->
   <div id="donation-modal" class="modal-overlay" aria-hidden="true">
-    <div class="modal-card" style="max-width:540px;text-align:center">
+    <div class="modal-card" style="max-width:580px;text-align:center">
       <button class="modal-close" id="donation-close-btn" title="Close">&times;</button>
       <div class="modal-content" style="padding:30px 24px">
         <div style="font-size:36px;margin-bottom:6px">❤️</div>
         <h2 class="h" style="font-size:22px;color:#fff;margin-bottom:12px">Support &amp; Donation</h2>
 
-        <div style="background:rgba(0,0,0,.4);border:1px solid var(--line2);padding:14px;border-radius:16px;margin-bottom:18px">
-          <img src="/QRCODE.png" alt="Donation QR Code" style="max-width:220px;width:100%;border-radius:12px;border:1px solid var(--line);display:block;margin:0 auto">
+        <div style="background:rgba(0,0,0,.4);border:1px solid var(--line2);padding:16px;border-radius:16px;margin-bottom:18px">
+          <div style="display:flex;gap:16px;justify-content:center;align-items:center;flex-wrap:wrap">
+            <div style="flex:1;min-width:200px;max-width:230px;text-align:center">
+              <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">USDT / Crypto</div>
+              <img src="/QRCODE.png" alt="Donation QR Code" style="width:100%;border-radius:12px;border:1px solid var(--line);display:block">
+            </div>
+            <div style="flex:1;min-width:200px;max-width:230px;text-align:center">
+              <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">PayPal Donation</div>
+              <img src="/Donation%20to%20SU-qrcode.png" alt="PayPal Donation QR Code" style="width:100%;border-radius:12px;border:1px solid var(--line);background:#fff;display:block">
+            </div>
+          </div>
         </div>
 
         <p style="font-size:13.5px;line-height:1.65;color:#c3d4e2;text-align:left;margin:0">
