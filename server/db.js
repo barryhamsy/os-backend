@@ -13,8 +13,9 @@ const db = new sqlite3.Database(dbPath);
 // NOTE: WAL creates database.db-wal and database.db-shm alongside the DB —
 // keep those out of git (see .gitignore).
 db.run('PRAGMA journal_mode = WAL');
-db.run('PRAGMA busy_timeout = 5000');
+db.run('PRAGMA busy_timeout = 10000');
 db.run('PRAGMA synchronous = NORMAL');
+db.run('PRAGMA wal_autocheckpoint = 1000');
 
 // Helper for promise-based queries
 function run(sql, params = []) {
@@ -45,9 +46,9 @@ function all(sql, params = []) {
 }
 
 async function initDb() {
-  db.serialize(async () => {
+  try {
     // 1. Users table (Admin & Resellers)
-    db.run(`
+    await run(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -59,7 +60,7 @@ async function initDb() {
     `);
 
     // 2. CDKeys table
-    db.run(`
+    await run(`
       CREATE TABLE IF NOT EXISTS keys (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cdkey TEXT UNIQUE NOT NULL,
@@ -75,16 +76,16 @@ async function initDb() {
     `);
 
     // Migration: store the game name alongside the AppID (ignored if column already exists)
-    db.run(`ALTER TABLE keys ADD COLUMN game_name TEXT`, () => {});
+    await run(`ALTER TABLE keys ADD COLUMN game_name TEXT`).catch(() => {});
 
     // Index the column computeEntitlements() filters on, so membership lookups
     // stay instant as the keys table grows into the thousands.
-    db.run(`CREATE INDEX IF NOT EXISTS idx_keys_activated_by ON keys(activated_by)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_keys_activated_by ON keys(activated_by)`).catch(() => {});
     // Fast lookups of a SteamID's activation history.
-    db.run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_activations_steamid ON activations(steamid)`).catch(() => {});
 
     // 3. Topup Logs table
-    db.run(`
+    await run(`
       CREATE TABLE IF NOT EXISTS topup_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         reseller_id INTEGER NOT NULL,
@@ -98,7 +99,7 @@ async function initDb() {
     `);
 
     // 4. Activation Logs table
-    db.run(`
+    await run(`
       CREATE TABLE IF NOT EXISTS activations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cdkey TEXT NOT NULL,
@@ -124,8 +125,17 @@ async function initDb() {
       console.log(`Password: ${defaultPassword}`);
       console.log('====================================================');
     }
-  });
+  } catch (err) {
+    console.error('[initDb] Database initialization error:', err.message);
+  }
 }
+
+// Periodic WAL checkpoint every 15 mins to keep WAL log file size compact
+setInterval(() => {
+  db.run('PRAGMA wal_checkpoint(TRUNCATE);', (err) => {
+    if (err) console.error('[DB WAL Checkpoint Error]', err.message);
+  });
+}, 15 * 60 * 1000);
 
 initDb();
 

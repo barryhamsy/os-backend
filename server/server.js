@@ -2343,7 +2343,7 @@ function saveGameInfoToDisk() {
     _saveInfoTimeout = null;
     try {
       const obj = Object.fromEntries(_infoCache);
-      fs.writeFileSync(GAME_INFO_CACHE_FILE, JSON.stringify(obj));
+      fs.writeFile(GAME_INFO_CACHE_FILE, JSON.stringify(obj), () => {});
     } catch (_) {}
   }, 5000);
 }
@@ -2604,6 +2604,15 @@ require('./og')(app, {
   db, authenticateToken, requireAdmin,
   dbAddUnlock, dbRemoveUnlock, mirrorUserToGitHub,
   commitKeyToGitHub, deleteKeyFromGitHub, toSteamId64,
+});
+
+// Global process error handlers to prevent crash-restart loops under load or DB errors
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Unhandled Rejection]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err.stack || err);
 });
 
 // Start Server
