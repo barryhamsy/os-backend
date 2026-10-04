@@ -1355,6 +1355,37 @@ app.get('/api/patch-info/:appid', async (req, res) => {
   }
 });
 
+// GET /api/patch-catalog → returns full lists of appids with online_supported, bypass_available, hypervisor_bypass
+const handlePatchCatalog = async (req, res) => {
+  try {
+    const games = await getGameCatalog();
+    const online_supported = [];
+    const bypass_available = [];
+    const hypervisor_bypass = [];
+
+    for (const g of games) {
+      const idStr = String(g.appid);
+      if (g.online_supported) online_supported.push(idStr);
+      if (g.bypass_supported) bypass_available.push(idStr);
+      if (g.hypervisor_bypass) hypervisor_bypass.push(idStr);
+    }
+
+    return res.json({
+      success: true,
+      updated_at: Date.now(),
+      online_supported,
+      bypass_available,
+      hypervisor_bypass,
+    });
+  } catch (e) {
+    return res.status(502).json({ success: false, error: 'catalog unreachable' });
+  }
+};
+app.get('/api/patch-catalog', handlePatchCatalog);
+app.get('/api/su/patch-catalog', handlePatchCatalog);
+app.get('/api/patches/catalog', handlePatchCatalog);
+
+
 // GET /api/su/validate?cd_key=...&steamid=...  → passes the result through.
 app.get('/api/su/validate', async (req, res) => {
   const cd = String(req.query.cd_key || '').trim();
