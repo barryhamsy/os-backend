@@ -1717,7 +1717,7 @@ app.get('/api/games', authenticateToken, async (req, res) => {
 
     let pool = showAdult ? games : games.filter((g) => !g.adult);
     // Exclude games with online_supported, bypass_supported, or hypervisor_bypass
-    pool = pool.filter((g) => !g.online_supported && !g.bypass_supported && !g.hypervisor_bypass);
+    pool = pool.filter((g) => !_yesFlag(g.online_supported) && !_yesFlag(g.bypass_supported) && !_yesFlag(g.hypervisor_bypass));
     let matches = pool;
 
     if (q) {
@@ -2291,7 +2291,7 @@ app.get('/dash/api/games', requireSteam, async (req, res) => {
     let pool = showAdult ? games : games.filter((g) => !g.adult);
 
     // Exclude games with online_supported, bypass_supported, or hypervisor_bypass from dashboard
-    pool = pool.filter((g) => !g.online_supported && !g.bypass_supported && !g.hypervisor_bypass);
+    pool = pool.filter((g) => !_yesFlag(g.online_supported) && !_yesFlag(g.bypass_supported) && !_yesFlag(g.hypervisor_bypass));
 
     // "My games" scope: restrict to the signed-in account's unlocked appids.
     if (scope === 'unlocked') {
