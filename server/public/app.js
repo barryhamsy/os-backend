@@ -232,16 +232,7 @@ function initEventListeners() {
     searchGames(1);
   });
 
-  document.querySelectorAll('.tagfilters .tagbtn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tag = btn.getAttribute('data-tag');
-      if (tag && gameCurTags.hasOwnProperty(tag)) {
-        gameCurTags[tag] = !gameCurTags[tag];
-        btn.classList.toggle('active', gameCurTags[tag]);
-        searchGames(1);
-      }
-    });
-  });
+
 
   document.getElementById('btn-game-prev')?.addEventListener('click', () => {
     if (gameCurPage > 1) searchGames(gameCurPage - 1);
@@ -852,9 +843,6 @@ async function searchGames(page = 1) {
         <div class="meta">
           ${g.genreName ? `<span class="chip">${escapeHtml(g.genreName)}</span>` : ''}
           ${g.size_gb ? `<span class="chip">${escapeHtml(g.size_gb)}</span>` : ''}
-          ${g.online_supported ? `<span class="chip tag online" title="Online-fix supported">Online</span>` : ''}
-          ${g.bypass_supported ? `<span class="chip tag bypass" title="Bypass supported">Bypass</span>` : ''}
-          ${g.hypervisor_bypass ? `<span class="chip tag hyper" title="Hypervisor bypass">Hypervisor</span>` : ''}
           ${g.adult ? `<span class="chip adult">18+</span>` : ''}
         </div>
       `;

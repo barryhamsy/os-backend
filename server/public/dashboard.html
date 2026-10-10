@@ -245,17 +245,7 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .game .chip.rating.mixed{border-color:rgba(255,196,84,.3);color:#ffcf6b}
 .game .chip.rating.neg{border-color:rgba(255,107,107,.3);color:#ff9c8c}
 .game .chip.adult{border-color:rgba(255,107,107,.45);color:#ff9c8c;background:rgba(255,107,107,.1);font-weight:800}
-/* support tags */
-.game .chip.tag{font-weight:700}
-.game .chip.tag.online{border-color:rgba(120,170,255,.42);color:#a9c7ff;background:rgba(120,170,255,.12)}
-.game .chip.tag.bypass{border-color:rgba(94,224,160,.42);color:#8ff0bd;background:rgba(94,224,160,.12)}
-.game .chip.tag.hyper{border-color:rgba(138,107,255,.5);color:#c3b4ff;background:rgba(138,107,255,.14)}
-/* tag filter toggles */
-.tagfilters{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-.tagbtn{cursor:pointer;user-select:none;padding:8px 12px;border-radius:10px;border:1px solid var(--line);
-  background:rgba(255,255,255,.04);color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap;transition:.15s}
-.tagbtn:hover{border-color:var(--purple)}
-.tagbtn.active{border-color:var(--purple);color:#fff;background:rgba(138,107,255,.2)}
+
 .ptoggle{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);cursor:pointer;
   padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:rgba(10,16,24,.7);user-select:none}
 .ptoggle input{accent-color:var(--blue2);width:15px;height:15px;cursor:pointer}
@@ -493,11 +483,7 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                 <input type="checkbox" id="adultchk" checked> 🔒 Parental Control
               </label>
             </div>
-            <div class="tagfilters">
-              <span class="tagbtn" id="tag-online" data-tag="online" title="Games with online-fix support">🌐 Online</span>
-              <span class="tagbtn" id="tag-bypass" data-tag="bypass" title="Games with bypass support">🛡️ Bypass</span>
-              <span class="tagbtn" id="tag-hyper" data-tag="hypervisor" title="Games with hypervisor bypass">🖥️ Hypervisor</span>
-            </div>
+
             <div id="games" class="grid"></div>
             <div id="gamestatus" class="center muted hide"></div>
             <div id="pager" class="pager">
@@ -929,9 +915,6 @@ function fillCardBody(el, g) {
     `<div class="meta">` +
     (g.genreName ? `<span class="chip genre-slot">${esc(g.genreName)}</span>` : `<span class="chip genre-slot" style="display:none"></span>`) +
     (g.size_gb ? `<span class="chip">${esc(g.size_gb)}</span>` : '') +
-    (g.online_supported ? `<span class="chip tag online" title="Online-fix supported">Online</span>` : '') +
-    (g.bypass_supported ? `<span class="chip tag bypass" title="Bypass supported">Bypass</span>` : '') +
-    (g.hypervisor_bypass ? `<span class="chip tag hyper" title="Hypervisor bypass">Hypervisor</span>` : '') +
     `<span class="chip rating rating-slot" style="display:none"></span>` +
     (g.adult ? `<span class="chip adult">18+</span>` : '') +
     `</div>`;
@@ -1362,7 +1345,7 @@ let curPage = 1;
 let curScope = 'all';   // 'all' | 'unlocked'
 let curGenre = '';
 let curSize = '';
-let curTags = { online:false, bypass:false, hypervisor:false };  // support-tag filters (AND)
+
 let showAdult = false;  // parental control: 18+ hidden by default
 
 function fmt(n){ return Number(n).toLocaleString('en-US'); }
@@ -1385,9 +1368,7 @@ async function loadGames(page, shouldScroll = false) {
     const params = new URLSearchParams({ q: curQuery, page: String(curPage), scope: curScope });
     if (curGenre) params.set('genre', curGenre);
     if (curSize) params.set('size', curSize);
-    if (curTags.online) params.set('online', '1');
-    if (curTags.bypass) params.set('bypass', '1');
-    if (curTags.hypervisor) params.set('hypervisor', '1');
+
     if (showAdult) params.set('adult', '1');
     const r = await api('/dash/api/games?' + params.toString());
     const games = r.games || [];
@@ -1632,9 +1613,7 @@ async function init() {
   $('tab-mine').addEventListener('click', () => switchTab('unlocked'));
   $('fgenre').addEventListener('change', () => { curGenre=$('fgenre').value; loadGames(1); });
   $('fsize').addEventListener('change', () => { curSize=$('fsize').value; loadGames(1); });
-  document.querySelectorAll('.tagbtn').forEach(b => b.addEventListener('click', () => {
-    const t = b.dataset.tag; curTags[t] = !curTags[t]; b.classList.toggle('active', curTags[t]); loadGames(1);
-  }));
+
   $('frating').addEventListener('change', () => { curRating=Number($('frating').value)||0; applyRatingFilter(); });
   $('prev').addEventListener('click', () => { if (curPage>1) loadGames(curPage-1, true); });
   $('next').addEventListener('click', () => loadGames(curPage+1, true));
