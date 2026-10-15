@@ -293,6 +293,42 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .unlocked-inline{display:inline-flex;align-items:center;color:#5ee0a0;font-weight:800;font-size:11px;
   background:rgba(94,224,160,.14);border:1px solid rgba(94,224,160,.35);padding:2px 7px;border-radius:10px;
   letter-spacing:.3px;box-shadow:0 0 10px rgba(94,224,160,.2);white-space:nowrap}
+/* Install-to-Steam button (shown on unlocked cards) */
+.btn-install{background:linear-gradient(135deg,var(--blue2),var(--blue3));color:#fff!important;
+  border:1px solid rgba(102,192,244,.55);box-shadow:0 6px 18px rgba(26,159,255,.35)}
+.btn-install:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-1px);box-shadow:0 8px 24px rgba(26,159,255,.5)}
+.card-btn-row{display:flex;gap:7px;margin-top:auto}
+.card-btn-row .btn{margin-top:0;flex:1}
+.card-btn-row .btn-install{flex:1.3}
+/* Install-target toggle + remote status bar */
+.install-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 12px;
+  padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(0,0,0,.22)}
+.install-bar .ib-label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--muted);padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer}
+.seg button.on{background:linear-gradient(135deg,var(--blue2),var(--blue3));color:#fff}
+.pc-dot{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.pc-dot i{width:9px;height:9px;border-radius:50%;background:#6b7a88;display:inline-block}
+.pc-dot.on i{background:#5ee0a0;box-shadow:0 0 8px rgba(94,224,160,.8)}
+.pc-dot.on{color:#5ee0a0}
+.link-btn{background:none;border:0;color:var(--blue);cursor:pointer;font-size:12px;font-weight:700;padding:0;text-decoration:underline}
+/* Remote setup panel */
+.setup-panel{margin:0 0 12px;padding:14px 16px;border:1px solid var(--line2);border-radius:12px;background:rgba(0,0,0,.3)}
+.setup-panel h4{margin:0 0 8px;font-size:14px;color:var(--blue)}
+.setup-panel ol{margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.7;color:#c3d4e2}
+.setup-panel code,.code-box{font-family:ui-monospace,monospace;font-size:12px}
+.code-box{display:block;background:#05090f;border:1px solid var(--line2);border-radius:8px;
+  padding:9px 11px;margin:6px 0;color:#cfe3f4;white-space:pre-wrap;word-break:break-all}
+/* Toast */
+#toast-wrap{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;
+  display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{pointer-events:auto;min-width:220px;max-width:92vw;padding:12px 16px;border-radius:12px;
+  font-size:13.5px;font-weight:600;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.5);
+  border:1px solid var(--line2);background:#0e1826;animation:toastIn .25s ease}
+.toast.ok{border-color:rgba(94,224,160,.5);background:linear-gradient(135deg,#0e2a1d,#0e1826)}
+.toast.warn{border-color:rgba(255,193,94,.5);background:linear-gradient(135deg,#2a230e,#0e1826)}
+.toast.err{border-color:rgba(255,107,107,.5);background:linear-gradient(135deg,#2a0e0e,#0e1826)}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 
 .status{font-size:13px;margin-top:12px;min-height:18px}
 .spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;
@@ -512,6 +548,36 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
               <label class="ptoggle" title="Parental control — hide 18+ / adult titles">
                 <input type="checkbox" id="adultchk" checked> 🔒 Parental Control
               </label>
+            </div>
+
+            <!-- Install-target toggle + remote PC status -->
+            <div class="install-bar">
+              <span class="ib-label">Install to</span>
+              <div class="seg" id="install-seg">
+                <button data-target="this" class="on">This PC</button>
+                <button data-target="remote">My Home PC</button>
+              </div>
+              <span id="pc-status" class="pc-dot" style="display:none"><i></i><span class="pc-txt">Checking PC…</span></span>
+              <button id="setup-toggle" class="link-btn" style="display:none">Set up remote install</button>
+            </div>
+
+            <!-- Remote install setup (collapsed by default) -->
+            <div id="setup-panel" class="setup-panel hide">
+              <h4>📡 Install games on your PC from anywhere</h4>
+              <p class="muted" style="font-size:13px;margin:0 0 4px">
+                Run this tiny helper on your gaming PC (the one with Steam). Once it's running, pick
+                <b>My Home PC</b> above and the Install button will start the download on that PC —
+                even when you're on a different network or on your phone.
+              </p>
+              <ol>
+                <li>Download the helper: <a id="helper-dl" href="/remote-helper.ps1" download>remote-helper.ps1</a></li>
+                <li>On your gaming PC, open <b>PowerShell</b>, go to the download folder, and run the install command below (it auto-starts at every login):</li>
+              </ol>
+              <code id="setup-cmd" class="code-box">…</code>
+              <button id="copy-setup" class="btn btn-ghost" style="padding:7px 12px;font-size:12.5px">Copy command</button>
+              <p class="muted" style="font-size:11.5px;margin:10px 0 0">
+                Your token is personal — anyone with it could send install requests to your PC. Keep it private.
+              </p>
             </div>
 
             <div id="games" class="grid"></div>
@@ -835,6 +901,130 @@ function renderMembership() {
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
+// ── Toast notifications ───────────────────────────────────────────────────────
+function toast(msg, kind = 'ok', ms = 3200) {
+  const wrap = $('toast-wrap');
+  if (!wrap) { alert(msg); return; }
+  const t = document.createElement('div');
+  t.className = 'toast ' + kind;
+  t.textContent = msg;
+  wrap.appendChild(t);
+  setTimeout(() => { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, ms);
+}
+
+// ── Install to Steam (local protocol or remote queue) ─────────────────────────
+// Remembered per-browser: 'this' = open Steam on the device looking at this page
+// (steam://install), 'remote' = queue the install for the helper on the home PC.
+let REMOTE = { token: '', serverUrl: '', online: false };
+function getInstallTarget() {
+  try { return localStorage.getItem('ost_install_target') === 'remote' ? 'remote' : 'this'; } catch (_) { return 'this'; }
+}
+function setInstallTarget(v) {
+  try { localStorage.setItem('ost_install_target', v); } catch (_) {}
+}
+// Fire steam://install/<appid> without navigating away from the dashboard.
+function steamInstallLocal(appid) {
+  const f = document.createElement('iframe');
+  f.style.display = 'none';
+  f.src = 'steam://install/' + appid;
+  document.body.appendChild(f);
+  setTimeout(() => f.remove(), 2000);
+}
+async function remoteInstall(appid) {
+  return api('/dash/api/remote-install', { method: 'POST', body: JSON.stringify({ appid: String(appid) }) });
+}
+async function installGame(g, btn) {
+  const appid = String(g.appid);
+  const target = getInstallTarget();
+  if (target === 'remote') {
+    if (btn) { btn.disabled = true; btn.dataset.o = btn.textContent; btn.textContent = 'Sending…'; }
+    try {
+      const r = await remoteInstall(appid);
+      if (r && r.success) {
+        if (r.online) toast(`“${g.name}” sent to your PC — Steam will open the install dialog there.`, 'ok');
+        else toast(`Queued “${g.name}”. Your PC helper is offline — it will install as soon as it’s running.`, 'warn', 4500);
+        refreshRemoteStatus();
+      } else {
+        toast((r && r.error) || 'Could not queue the install.', 'err');
+      }
+    } catch (e) {
+      if (e.message !== 'unauth') toast('Remote install failed: ' + e.message, 'err');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.o || '⬇ Install'; }
+    }
+  } else {
+    steamInstallLocal(appid);
+    toast(`Opening Steam to install “${g.name}”…`, 'ok');
+  }
+}
+
+// ── Remote PC status + setup panel ────────────────────────────────────────────
+function buildSetupCmd() {
+  const srv = REMOTE.serverUrl || location.origin;
+  const sid = (ME && ME.steamid) || '';
+  const tok = REMOTE.token || '';
+  return `powershell -NoProfile -ExecutionPolicy Bypass -File .\\remote-helper.ps1 -Install ` +
+         `-ServerUrl "${srv}" -SteamId "${sid}" -Token "${tok}"`;
+}
+function renderRemoteStatusUI() {
+  const target = getInstallTarget();
+  const dot = $('pc-status');
+  const setupToggle = $('setup-toggle');
+  // The PC status + setup link only matter for the remote target.
+  if (dot) {
+    dot.style.display = target === 'remote' ? '' : 'none';
+    dot.classList.toggle('on', !!REMOTE.online);
+    const txt = dot.querySelector('.pc-txt');
+    if (txt) txt.textContent = REMOTE.online ? 'Home PC online' : 'Home PC offline';
+  }
+  if (setupToggle) setupToggle.style.display = target === 'remote' ? '' : 'none';
+  const cmd = $('setup-cmd'); if (cmd) cmd.textContent = buildSetupCmd();
+}
+async function refreshRemoteStatus() {
+  try {
+    const r = await api('/dash/api/remote-status');
+    REMOTE.token = r.token || '';
+    REMOTE.serverUrl = r.serverUrl || location.origin;
+    REMOTE.online = !!r.online;
+  } catch (_) { /* leave previous state */ }
+  renderRemoteStatusUI();
+}
+let _remoteTimer = null;
+function startRemotePolling() {
+  if (_remoteTimer) clearInterval(_remoteTimer);
+  // Only poll while the user is actually using the remote target.
+  _remoteTimer = setInterval(() => { if (getInstallTarget() === 'remote') refreshRemoteStatus(); }, 15000);
+}
+function wireInstallBar() {
+  const seg = $('install-seg');
+  if (seg) {
+    const cur = getInstallTarget();
+    seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.target === cur));
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const v = b.dataset.target;
+      setInstallTarget(v);
+      seg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      renderRemoteStatusUI();
+      if (v === 'remote') refreshRemoteStatus();
+      else { const sp = $('setup-panel'); if (sp) sp.classList.add('hide'); }
+    });
+  }
+  const setupToggle = $('setup-toggle');
+  if (setupToggle) setupToggle.addEventListener('click', () => {
+    const sp = $('setup-panel');
+    if (sp) { sp.classList.toggle('hide'); if (!sp.classList.contains('hide')) refreshRemoteStatus(); }
+  });
+  const copyBtn = $('copy-setup');
+  if (copyBtn) copyBtn.addEventListener('click', () => {
+    const cmd = buildSetupCmd();
+    navigator.clipboard.writeText(cmd).then(() => {
+      const o = copyBtn.textContent; copyBtn.textContent = '✓ Copied!';
+      setTimeout(() => { copyBtn.textContent = o; }, 2000);
+    }).catch(() => toast('Copy failed — select the command manually.', 'warn'));
+  });
+}
+
 // Steam cover art is spread across several CDN hosts, and any single one is
 // often missing a given appid. Try them in order, falling through on error —
 // same approach as the launcher's _setImageWithScreenshotFallback.
@@ -952,13 +1142,18 @@ function fillCardBody(el, g) {
   body.innerHTML =
     `<div class="nm"><span>${esc(g.name)}</span>${unlockedBadge}</div><div class="ap">AppID ${esc(g.appid)}</div>` + meta +
     (has
-      ? `<button class="btn btn-remove" data-appid="${g.appid}">Remove</button>`
+      ? `<div class="card-btn-row">` +
+          `<button class="btn btn-install" data-appid="${g.appid}" title="Install this game to Steam">⬇ Install</button>` +
+          `<button class="btn btn-remove" data-appid="${g.appid}">Remove</button>` +
+        `</div>`
       : `<button class="btn btn-green" data-appid="${g.appid}">Unlock game</button>`);
   paintRating(el); // restore rating chip after a re-render (unlock/remove)
   const unlockBtn = body.querySelector('.btn-green');
   if (unlockBtn) unlockBtn.addEventListener('click', () => unlockGame(g, unlockBtn));
   const removeBtn = body.querySelector('.btn-remove');
   if (removeBtn) removeBtn.addEventListener('click', () => removeGame(g, removeBtn));
+  const installBtn = body.querySelector('.btn-install');
+  if (installBtn) installBtn.addEventListener('click', () => installGame(g, installBtn));
 }
 
 function gameCard(g) {
@@ -1170,9 +1365,13 @@ async function openGameModal(g) {
   function renderModalAction() {
     const has = unlocked.has(String(g.appid));
     actionBox.innerHTML = has
-      ? `<div class="row" style="gap:8px"><span class="unlocked" style="font-size:13px">✓ Unlocked</span><button class="btn btn-remove" id="modal-act-btn">Remove</button></div>`
+      ? `<div class="row" style="gap:8px;flex-wrap:wrap"><span class="unlocked" style="font-size:13px">✓ Unlocked</span>` +
+        `<button class="btn btn-install" id="modal-install-btn" title="Install this game to Steam">⬇ Install</button>` +
+        `<button class="btn btn-remove" id="modal-act-btn">Remove</button></div>`
       : `<button class="btn btn-green" id="modal-act-btn">Unlock game</button>`;
-    
+
+    const installBtn = $('modal-install-btn');
+    if (installBtn) installBtn.addEventListener('click', () => installGame(g, installBtn));
     const actBtn = $('modal-act-btn');
     if (actBtn) {
       actBtn.addEventListener('click', async () => {
@@ -1518,6 +1717,12 @@ async function init() {
   unlocked = new Set((ME.appids||[]).map(String));
   renderMembership();
 
+  // Install-target toggle + remote PC status.
+  wireInstallBar();
+  renderRemoteStatusUI();
+  if (getInstallTarget() === 'remote') refreshRemoteStatus();
+  startRemotePolling();
+
   // 1-Click PC Setup Buttons (Option 1 & Option 2)
   const copyBtn = $('copy-cmd-btn');
   if (copyBtn) {
@@ -1651,5 +1856,6 @@ async function init() {
 }
 init();
 </script>
+<div id="toast-wrap"></div>
 </body>
 </html>

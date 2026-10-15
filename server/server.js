@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const db = require('./db');
 
 const app = express();
@@ -47,6 +48,40 @@ db.run(`CREATE TABLE IF NOT EXISTS user_memberships (
   expiry_date TEXT,
   updated_at INTEGER
 )`).catch((e) => console.error('[user_memberships] init failed:', e.message));
+
+// ── Remote-install command queue ─────────────────────────────────────────────
+// A small per-SteamID queue of one-shot commands (currently just "install
+// <appid>"). The dashboard pushes a command (session-authenticated); a tiny
+// helper running on the user's gaming PC polls it out and runs
+// steam://install/<appid> locally. The helper reaches OUT to this server, so it
+// works from any network behind NAT — same outbound model the DLL already uses.
+db.run(`CREATE TABLE IF NOT EXISTS remote_commands (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  steamid  TEXT NOT NULL,
+  type     TEXT NOT NULL,
+  appid    TEXT,
+  created_at INTEGER NOT NULL
+)`).catch((e) => console.error('[remote_commands] init failed:', e.message));
+db.run(`CREATE INDEX IF NOT EXISTS idx_remote_commands_sid ON remote_commands(steamid)`).catch(() => {});
+
+// Last time each SteamID's helper polled — powers the dashboard "PC online" dot.
+// In-memory is fine: on restart every helper re-announces within one poll.
+const _helperSeen = new Map(); // steamid64 -> epoch ms
+const HELPER_ONLINE_MS = 20000; // consider the helper online if seen in last 20s
+
+// Stateless per-user helper token: HMAC(JWT_SECRET, "helper:<sid64>"). The user
+// pastes it into the helper once; the poll endpoint requires it so a stranger
+// who knows a SteamID can't drain or spy on the queue. No DB column needed.
+function helperToken(sid64) {
+  return crypto.createHmac('sha256', JWT_SECRET).update('helper:' + String(sid64)).digest('hex').slice(0, 32);
+}
+function helperTokenOk(sid64, tok) {
+  if (!tok) return false;
+  const want = helperToken(sid64);
+  const a = Buffer.from(String(tok));
+  const b = Buffer.from(want);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 const _entitlementsVersionCache = new Map();
 const _entitlementsCache = new Map();
@@ -2551,6 +2586,73 @@ app.post('/dash/api/remove', requireSteam, async (req, res) => {
     if (migrated) mirrorUserToGitHub(sid);
     console.log(`[Dashboard] ${sid} -= ${appId} (${appids.length} total)`);
     res.json({ success: true, appids });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Remote install: dashboard → queue → home-PC helper ───────────────────────
+// Status for the signed-in user: the helper token to paste into the helper, the
+// server URL it should poll, and whether that helper has polled recently.
+app.get('/dash/api/remote-status', requireSteam, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const sid = toSteamId64(req.steamid);
+    const seen = _helperSeen.get(sid) || 0;
+    const pending = await db.get('SELECT COUNT(*) AS n FROM remote_commands WHERE steamid = ?', [sid]).catch(() => ({ n: 0 }));
+    res.json({
+      steamid: sid,
+      token: helperToken(sid),
+      serverUrl: SITE_URL,
+      online: (Date.now() - seen) < HELPER_ONLINE_MS,
+      lastSeen: seen || null,
+      pending: pending.n || 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Queue a "send this game to my PC to install" command. Session-authenticated,
+// so a user can only queue to their own SteamID.
+app.post('/dash/api/remote-install', requireSteam, async (req, res) => {
+  try {
+    const sid = toSteamId64(req.steamid);
+    const appId = String((req.body && req.body.appid) || '').replace(/\D/g, '');
+    if (!appId) return res.status(400).json({ error: 'appid required' });
+    // Drop anything stale (> 10 min) so a long-offline PC doesn't get a backlog.
+    await db.run('DELETE FROM remote_commands WHERE created_at < ?', [Date.now() - 10 * 60 * 1000]).catch(() => {});
+    // De-dupe: don't stack the same pending install.
+    const dup = await db.get(
+      "SELECT id FROM remote_commands WHERE steamid = ? AND type = 'install' AND appid = ?",
+      [sid, appId]
+    ).catch(() => null);
+    if (!dup) {
+      await db.run(
+        "INSERT INTO remote_commands (steamid, type, appid, created_at) VALUES (?, 'install', ?, ?)",
+        [sid, appId, Date.now()]
+      );
+    }
+    const seen = _helperSeen.get(sid) || 0;
+    const online = (Date.now() - seen) < HELPER_ONLINE_MS;
+    console.log(`[Remote] ${sid} queued install ${appId} (helper ${online ? 'online' : 'offline'})`);
+    res.json({ success: true, queued: true, online, lastSeen: seen || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUBLIC (token-gated): the home-PC helper polls this. It records the poll for
+// the "PC online" indicator, then pops and returns any pending commands.
+app.get('/api/remote/commands/:steamid', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const sid = toSteamId64(String(req.params.steamid).trim());
+    if (!helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
+    _helperSeen.set(sid, Date.now());
+    const rows = await db.all(
+      'SELECT id, type, appid FROM remote_commands WHERE steamid = ? ORDER BY id ASC LIMIT 50',
+      [sid]
+    ).catch(() => []);
+    if (rows.length) {
+      const ids = rows.map((r) => r.id);
+      await db.run(`DELETE FROM remote_commands WHERE id IN (${ids.map(() => '?').join(',')})`, ids).catch(() => {});
+    }
+    res.json({ commands: rows.map((r) => ({ type: r.type, appid: r.appid })) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
