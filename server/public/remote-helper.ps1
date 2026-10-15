@@ -117,11 +117,88 @@ if ($Install) {
 }
 
 # --- Poll loop ----------------------------------------------------------------
-$endpoint = ('{0}/api/remote/commands/{1}?token={2}' -f $ServerUrl, $SteamId, [uri]::EscapeDataString($Token))
+$endpoint    = ('{0}/api/remote/commands/{1}?token={2}' -f $ServerUrl, $SteamId, [uri]::EscapeDataString($Token))
+$reportUrl   = ('{0}/api/remote/report/{1}?token={2}' -f $ServerUrl, $SteamId, [uri]::EscapeDataString($Token))
+
+# Find the Steam install folder from the registry.
+function Get-SteamPath {
+  foreach ($k in @('HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam')) {
+    try {
+      $p = (Get-ItemProperty -Path $k -ErrorAction Stop)
+      $val = if ($p.SteamPath) { $p.SteamPath } elseif ($p.InstallPath) { $p.InstallPath } else { $null }
+      if ($val -and (Test-Path $val)) { return ($val -replace '/', '\') }
+    } catch {}
+  }
+  return $null
+}
+
+# Gather fixed drives, Steam library folders (+ free space), and the download
+# progress of any game currently installing (read straight from Steam's acf
+# manifests). All read-only - nothing on the PC is modified.
+function Get-MachineState {
+  $drives = @()
+  try {
+    foreach ($d in Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop) {
+      $drives += @{ drive = $d.DeviceID; label = $d.VolumeName;
+                    freeGB = [math]::Round($d.FreeSpace / 1GB, 1); totalGB = [math]::Round($d.Size / 1GB, 1) }
+    }
+  } catch {}
+
+  $libs = @()
+  $installs = @()
+  $steam = Get-SteamPath
+  if ($steam) {
+    $libPaths = @()
+    $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+    if (Test-Path $vdf) {
+      $raw = Get-Content $vdf -Raw -ErrorAction SilentlyContinue
+      foreach ($m in [regex]::Matches($raw, '"path"\s+"([^"]+)"')) {
+        $libPaths += ($m.Groups[1].Value -replace '\\\\', '\')
+      }
+    }
+    if ($libPaths.Count -eq 0) { $libPaths += $steam }  # single-library install
+    foreach ($lp in ($libPaths | Select-Object -Unique)) {
+      $root = [System.IO.Path]::GetPathRoot($lp)
+      $free = $null
+      try { $free = [math]::Round((New-Object System.IO.DriveInfo($root)).AvailableFreeSpace / 1GB, 1) } catch {}
+      $libs += @{ path = $lp; drive = $root.TrimEnd('\'); freeGB = $free }
+
+      $sa = Join-Path $lp 'steamapps'
+      if (Test-Path $sa) {
+        foreach ($acf in (Get-ChildItem $sa -Filter 'appmanifest_*.acf' -ErrorAction SilentlyContinue)) {
+          try {
+            $t = Get-Content $acf.FullName -Raw -ErrorAction SilentlyContinue
+            $appid = if ($t -match '"appid"\s+"(\d+)"') { $matches[1] } else { $null }
+            if (-not $appid) { continue }
+            $state = if ($t -match '"StateFlags"\s+"(\d+)"') { [int]$matches[1] } else { 0 }
+            $done  = if ($t -match '"BytesDownloaded"\s+"(\d+)"') { [double]$matches[1] } else { 0 }
+            $total = if ($t -match '"BytesToDownload"\s+"(\d+)"') { [double]$matches[1] } else { 0 }
+            $fullyInstalled = ($state -band 4) -gt 0 -and $total -le 0
+            $pct = if ($total -gt 0) { [math]::Round(($done / $total) * 100, 1) } elseif ($fullyInstalled) { 100 } else { 0 }
+            $installing = ($total -gt 0 -and $done -lt $total)
+            $installs += @{ appid = $appid; pct = $pct; installing = $installing; installed = $fullyInstalled; drive = $root.TrimEnd('\') }
+          } catch {}
+        }
+      }
+    }
+  }
+  return @{ drives = $drives; libraries = $libs; installs = $installs; steam = [bool]$steam }
+}
+
+function Send-Report {
+  try {
+    $state = Get-MachineState
+    $json = $state | ConvertTo-Json -Depth 6 -Compress
+    Invoke-RestMethod -Uri $reportUrl -Method Post -Body $json -ContentType 'application/json' -TimeoutSec 15 | Out-Null
+  } catch { }
+}
+
 Write-Log "Helper running. Polling $ServerUrl every $IntervalSeconds s for SteamID $SteamId."
 Write-Log "Press Ctrl+C to stop (if auto-start is installed it restarts at next login)."
 
 $wasOffline = $false
+$lastReport = [datetime]::MinValue
+Send-Report  # initial snapshot so the dashboard sees drives right away
 while ($true) {
   try {
     $resp = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 15 -Headers @{ 'Cache-Control' = 'no-store' }
@@ -135,6 +212,7 @@ while ($true) {
             Write-Log "Install request for AppID $appid - launching steam://install/$appid"
             try { Start-Process ("steam://install/$appid") }
             catch { Write-Log "Failed to launch Steam for ${appid}: $($_.Exception.Message)" 'ERROR' }
+            $lastReport = [datetime]::MinValue  # force a fresh report so progress shows up fast
           }
         } else {
           Write-Log "Ignoring unknown command: $($cmd.type)" 'WARN'
@@ -147,5 +225,7 @@ while ($true) {
       $wasOffline = $true
     }
   }
+  # Report drives + install progress to the dashboard every ~8s.
+  if (([datetime]::Now - $lastReport).TotalSeconds -ge 8) { Send-Report; $lastReport = [datetime]::Now }
   Start-Sleep -Seconds $IntervalSeconds
 }

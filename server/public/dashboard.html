@@ -297,6 +297,15 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .btn-install{background:linear-gradient(135deg,var(--blue2),var(--blue3));color:#fff!important;
   border:1px solid rgba(102,192,244,.55);box-shadow:0 6px 18px rgba(26,159,255,.35)}
 .btn-install:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-1px);box-shadow:0 8px 24px rgba(26,159,255,.5)}
+/* PC storage summary (drives / Steam libraries + free space) */
+.pc-storage{display:inline-flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.pc-storage .dr{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--line);border-radius:8px;background:rgba(0,0,0,.25)}
+.pc-storage .dr b{color:var(--text);font-weight:700}
+/* Live install progress bar on a card */
+.card-progress{margin-top:8px}
+.cp-track{height:7px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
+.cp-fill{height:100%;background:linear-gradient(90deg,var(--blue2),var(--green));transition:width .5s ease}
+.cp-txt{font-size:11px;color:var(--blue);margin-top:3px;font-weight:700}
 .card-btn-row{display:flex;gap:7px;margin-top:auto}
 .card-btn-row .btn{margin-top:0;flex:1}
 .card-btn-row .btn-install{flex:1.3}
@@ -558,6 +567,7 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                 <button data-target="remote">My Home PC</button>
               </div>
               <span id="pc-status" class="pc-dot" style="display:none"><i></i><span class="pc-txt">Checking PC…</span></span>
+              <span id="pc-storage" class="pc-storage" style="display:none"></span>
               <button id="setup-toggle" class="link-btn" style="display:none">Set up remote install</button>
             </div>
 
@@ -924,7 +934,27 @@ function toast(msg, kind = 'ok', ms = 3200) {
 // ── Install to Steam (local protocol or remote queue) ─────────────────────────
 // Remembered per-browser: 'this' = open Steam on the device looking at this page
 // (steam://install), 'remote' = queue the install for the helper on the home PC.
-let REMOTE = { token: '', serverUrl: '', online: false };
+let REMOTE = { token: '', serverUrl: '', online: false, machine: null };
+// Parse a GB number out of a catalog size value ("45 GB", "45", 45, "1.2 TB").
+function parseGB(v) {
+  if (v == null) return null;
+  const s = String(v);
+  const m = s.match(/([\d.]+)\s*(TB|GB|MB)?/i);
+  if (!m) return null;
+  let n = parseFloat(m[1]);
+  const unit = (m[2] || 'GB').toUpperCase();
+  if (unit === 'TB') n *= 1024; else if (unit === 'MB') n /= 1024;
+  return isNaN(n) ? null : n;
+}
+// Most free space available among Steam libraries (fallback: fixed drives).
+function bestFreeGB() {
+  const m = REMOTE.machine;
+  if (!m) return null;
+  const pool = (m.libraries && m.libraries.length ? m.libraries : m.drives) || [];
+  let best = null;
+  pool.forEach((x) => { if (x.freeGB != null && (best == null || x.freeGB > best)) best = x.freeGB; });
+  return best;
+}
 function getInstallTarget() {
   try { return localStorage.getItem('ost_install_target') === 'remote' ? 'remote' : 'this'; } catch (_) { return 'this'; }
 }
@@ -946,6 +976,13 @@ async function installGame(g, btn) {
   const appid = String(g.appid);
   const target = getInstallTarget();
   if (target === 'remote') {
+    // Warn if the game is bigger than any drive's free space on the PC.
+    const need = parseGB(g.size_gb);
+    const free = bestFreeGB();
+    if (need != null && free != null && need > free) {
+      const ok = window.confirm(`"${g.name}" needs about ${need} GB, but your PC's most free drive only has ${free} GB.\n\nSend it anyway?`);
+      if (!ok) return;
+    }
     if (btn) { btn.disabled = true; btn.dataset.o = btn.textContent; btn.textContent = 'Sending…'; }
     try {
       const r = await remoteInstall(appid);
@@ -988,6 +1025,49 @@ function renderRemoteStatusUI() {
   }
   if (setupToggle) setupToggle.style.display = target === 'remote' ? '' : 'none';
   const cmd = $('setup-cmd'); if (cmd) cmd.textContent = buildSetupCmd();
+  renderStorage();
+  applyMachineToCards();
+}
+// Compact "C: 120 GB free - D: 400 GB free" summary of the PC's install targets.
+function renderStorage() {
+  const el = $('pc-storage');
+  if (!el) return;
+  const m = REMOTE.machine;
+  const show = getInstallTarget() === 'remote' && REMOTE.online && m;
+  el.style.display = show ? '' : 'none';
+  if (!show) { el.innerHTML = ''; return; }
+  const pool = (m.libraries && m.libraries.length ? m.libraries : m.drives) || [];
+  const seen = new Set();
+  const parts = [];
+  pool.forEach((x) => {
+    const d = (x.drive || x.path || '').toString();
+    if (!d || seen.has(d) || x.freeGB == null) return;
+    seen.add(d);
+    parts.push(`<span class="dr"><b>${esc(d)}</b> ${esc(x.freeGB)} GB free</span>`);
+  });
+  el.innerHTML = parts.length ? parts.join('') : '';
+}
+// Paint a live progress bar on any visible card whose game is installing.
+function applyMachineToCards() {
+  const installs = (REMOTE.machine && REMOTE.machine.installs) || [];
+  const byId = {};
+  installs.forEach((i) => { byId[String(i.appid)] = i; });
+  document.querySelectorAll('#games .game').forEach((card) => {
+    const btn = card.querySelector('[data-appid]');
+    if (!btn) return;
+    const appid = btn.getAttribute('data-appid');
+    const info = byId[appid];
+    const body = card.querySelector('.body');
+    let bar = card.querySelector('.card-progress');
+    if (info && info.installing) {
+      if (!bar) { bar = document.createElement('div'); bar.className = 'card-progress'; body.appendChild(bar); }
+      const pct = Math.max(0, Math.min(100, Number(info.pct) || 0));
+      bar.innerHTML = `<div class="cp-track"><div class="cp-fill" style="width:${pct}%"></div></div>` +
+                      `<div class="cp-txt">Installing ${pct}%${info.drive ? ' · ' + esc(info.drive) : ''}</div>`;
+    } else if (bar) {
+      bar.remove();
+    }
+  });
 }
 async function refreshRemoteStatus() {
   try {
@@ -995,14 +1075,15 @@ async function refreshRemoteStatus() {
     REMOTE.token = r.token || '';
     REMOTE.serverUrl = r.serverUrl || location.origin;
     REMOTE.online = !!r.online;
+    REMOTE.machine = r.machine || null;
   } catch (_) { /* leave previous state */ }
   renderRemoteStatusUI();
 }
 let _remoteTimer = null;
 function startRemotePolling() {
   if (_remoteTimer) clearInterval(_remoteTimer);
-  // Only poll while the user is actually using the remote target.
-  _remoteTimer = setInterval(() => { if (getInstallTarget() === 'remote') refreshRemoteStatus(); }, 15000);
+  // Poll every 5s while on the remote target so the progress bars stay live.
+  _remoteTimer = setInterval(() => { if (getInstallTarget() === 'remote') refreshRemoteStatus(); }, 5000);
 }
 function wireInstallBar() {
   const seg = $('install-seg');
@@ -1624,6 +1705,7 @@ async function loadGames(page, shouldScroll = false) {
     games.forEach(g => frag.appendChild(gameCard(g)));
     $('games').appendChild(frag);
     applyRatingFilter(); // honor an active rating filter on the fresh cards
+    if (getInstallTarget() === 'remote') applyMachineToCards(); // paint live progress on fresh cards
     // Pager: always stay visible
     curPage = r.page || 1;
     const pages = r.pages || 1;

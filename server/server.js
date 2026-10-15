@@ -67,6 +67,8 @@ db.run(`CREATE INDEX IF NOT EXISTS idx_remote_commands_sid ON remote_commands(st
 // Last time each SteamID's helper polled — powers the dashboard "PC online" dot.
 // In-memory is fine: on restart every helper re-announces within one poll.
 const _helperSeen = new Map(); // steamid64 -> epoch ms
+// Latest machine snapshot the helper reported: { drives, libraries, installs, ts }.
+const _machineState = new Map(); // steamid64 -> state object
 const HELPER_ONLINE_MS = 20000; // consider the helper online if seen in last 20s
 
 // Stateless per-user helper token: HMAC(JWT_SECRET, "helper:<sid64>"). The user
@@ -2598,6 +2600,7 @@ app.get('/dash/api/remote-status', requireSteam, async (req, res) => {
     const sid = toSteamId64(req.steamid);
     const seen = _helperSeen.get(sid) || 0;
     const pending = await db.get('SELECT COUNT(*) AS n FROM remote_commands WHERE steamid = ?', [sid]).catch(() => ({ n: 0 }));
+    const machine = _machineState.get(sid) || null;
     res.json({
       steamid: sid,
       token: helperToken(sid),
@@ -2605,6 +2608,7 @@ app.get('/dash/api/remote-status', requireSteam, async (req, res) => {
       online: (Date.now() - seen) < HELPER_ONLINE_MS,
       lastSeen: seen || null,
       pending: pending.n || 0,
+      machine: machine ? { drives: machine.drives, libraries: machine.libraries, installs: machine.installs, ts: machine.ts } : null,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2687,6 +2691,25 @@ app.get('/api/remote/commands/:steamid', async (req, res) => {
       await db.run(`DELETE FROM remote_commands WHERE id IN (${ids.map(() => '?').join(',')})`, ids).catch(() => {});
     }
     res.json({ commands: rows.map((r) => ({ type: r.type, appid: r.appid })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUBLIC (token-gated): the helper POSTs the PC's drives, Steam libraries and
+// live install progress here. Kept in memory and surfaced to the dashboard via
+// /dash/api/remote-status. Also counts as a poll (keeps the "online" dot green).
+app.post('/api/remote/report/:steamid', async (req, res) => {
+  try {
+    const sid = toSteamId64(String(req.params.steamid).trim());
+    if (!helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
+    _helperSeen.set(sid, Date.now());
+    const b = req.body || {};
+    _machineState.set(sid, {
+      drives: Array.isArray(b.drives) ? b.drives.slice(0, 32) : [],
+      libraries: Array.isArray(b.libraries) ? b.libraries.slice(0, 32) : [],
+      installs: Array.isArray(b.installs) ? b.installs.slice(0, 200) : [],
+      ts: Date.now(),
+    });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
