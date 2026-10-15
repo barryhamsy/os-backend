@@ -567,6 +567,10 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                 <button data-target="remote">My Home PC</button>
               </div>
               <span id="pc-status" class="pc-dot" style="display:none"><i></i><span class="pc-txt">Checking PC…</span></span>
+              <label id="drive-wrap" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
+                Drive
+                <select id="drive-select" class="sel" title="Which drive to install games onto"></select>
+              </label>
               <span id="pc-storage" class="pc-storage" style="display:none"></span>
               <button id="setup-toggle" class="link-btn" style="display:none">Set up remote install</button>
             </div>
@@ -587,13 +591,6 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                     starts it right away, and sets it to auto-start at every login. That's all — nothing to type.</li>
               </ol>
               <a id="helper-dl-btn" href="/dash/api/remote-setup.bat" class="btn btn-install" style="display:inline-flex;width:auto;padding:9px 16px;margin-top:4px">⬇ Download setup file (.bat)</a>
-              <details style="margin-top:12px">
-                <summary style="cursor:pointer;color:var(--blue);font-size:12.5px;font-weight:700">Prefer to run it manually in PowerShell?</summary>
-                <p class="muted" style="font-size:12px;margin:8px 0 4px">On your gaming PC, download
-                  <a href="/remote-helper.ps1">remote-helper.ps1</a>, then run this from its folder:</p>
-                <code id="setup-cmd" class="code-box">…</code>
-                <button id="copy-setup" class="btn btn-ghost" style="padding:7px 12px;font-size:12.5px">Copy command</button>
-              </details>
               <p class="muted" style="font-size:11.5px;margin:10px 0 0">
                 This file contains your personal token — anyone with it could send install requests to your PC. Keep it private.
               </p>
@@ -970,15 +967,34 @@ function steamInstallLocal(appid) {
   setTimeout(() => f.remove(), 2000);
 }
 async function remoteInstall(appid) {
-  return api('/dash/api/remote-install', { method: 'POST', body: JSON.stringify({ appid: String(appid) }) });
+  const body = { appid: String(appid) };
+  const lib = getSelectedLibrary();
+  if (lib) body.library = lib;
+  return api('/dash/api/remote-install', { method: 'POST', body: JSON.stringify(body) });
+}
+// The install library the user picked in the Drive dropdown (localStorage-backed).
+function getSelectedLibrary() {
+  const sel = $('drive-select');
+  if (sel && sel.value) return sel.value;
+  try { return localStorage.getItem('ost_install_lib') || ''; } catch (_) { return ''; }
+}
+// Free space (GB) of a specific library/drive path, from the last report.
+function freeGBForPath(p) {
+  const m = REMOTE.machine;
+  if (!m || !p) return null;
+  const pool = (m.libraries && m.libraries.length ? m.libraries : m.drives) || [];
+  for (const x of pool) { if ((x.path || x.drive) === p) return x.freeGB; }
+  return null;
 }
 async function installGame(g, btn) {
   const appid = String(g.appid);
   const target = getInstallTarget();
   if (target === 'remote') {
-    // Warn if the game is bigger than any drive's free space on the PC.
+    // Warn if the game is bigger than the chosen drive's free space (fall back
+    // to the most-free drive when none is explicitly picked).
     const need = parseGB(g.size_gb);
-    const free = bestFreeGB();
+    const picked = getSelectedLibrary();
+    const free = picked ? freeGBForPath(picked) : bestFreeGB();
     if (need != null && free != null && need > free) {
       const ok = window.confirm(`"${g.name}" needs about ${need} GB, but your PC's most free drive only has ${free} GB.\n\nSend it anyway?`);
       if (!ok) return;
@@ -1025,8 +1041,34 @@ function renderRemoteStatusUI() {
   }
   if (setupToggle) setupToggle.style.display = target === 'remote' ? '' : 'none';
   const cmd = $('setup-cmd'); if (cmd) cmd.textContent = buildSetupCmd();
+  renderDriveSelect();
   renderStorage();
   applyMachineToCards();
+}
+// Populate the Drive dropdown with the PC's Steam libraries (+ free space),
+// remembering the user's pick in localStorage.
+function renderDriveSelect() {
+  const wrap = $('drive-wrap');
+  const sel = $('drive-select');
+  if (!wrap || !sel) return;
+  const m = REMOTE.machine;
+  const libs = (m && m.libraries && m.libraries.length) ? m.libraries : (m && m.drives) || [];
+  const show = getInstallTarget() === 'remote' && REMOTE.online && libs.length > 0;
+  wrap.style.display = show ? 'inline-flex' : 'none';
+  if (!show) return;
+  let saved = '';
+  try { saved = localStorage.getItem('ost_install_lib') || ''; } catch (_) {}
+  const want = sel.value || saved;
+  const opts = libs.map((x) => {
+    const path = x.path || x.drive || '';
+    const label = (x.drive || x.path || '') + (x.freeGB != null ? ` — ${x.freeGB} GB free` : '');
+    return `<option value="${esc(path)}">${esc(label)}</option>`;
+  });
+  // "Steam default" lets the user opt out of forcing a drive.
+  opts.unshift('<option value="">Steam default</option>');
+  sel.innerHTML = opts.join('');
+  // Restore the remembered choice if it's still a valid option.
+  if ([...sel.options].some((o) => o.value === want)) sel.value = want;
 }
 // Compact "C: 120 GB free - D: 400 GB free" summary of the PC's install targets.
 function renderStorage() {
@@ -1100,6 +1142,12 @@ function wireInstallBar() {
       else { const sp = $('setup-panel'); if (sp) sp.classList.add('hide'); }
     });
   }
+  const driveSel = $('drive-select');
+  if (driveSel) driveSel.addEventListener('change', () => {
+    try { localStorage.setItem('ost_install_lib', driveSel.value || ''); } catch (_) {}
+    const label = driveSel.options[driveSel.selectedIndex] ? driveSel.options[driveSel.selectedIndex].textContent : driveSel.value;
+    toast(driveSel.value ? `New installs will go to ${label}.` : 'New installs will use Steam’s default drive.', 'ok');
+  });
   const setupToggle = $('setup-toggle');
   if (setupToggle) setupToggle.addEventListener('click', () => {
     const sp = $('setup-panel');

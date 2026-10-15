@@ -193,6 +193,43 @@ function Send-Report {
   } catch { }
 }
 
+# Force a game to install onto a chosen library/drive. Steam has no protocol
+# parameter for this, so we drop a minimal appmanifest "stub" into that library's
+# steamapps folder (StateFlags 2 = "update required"); Steam then downloads the
+# game THERE when steam://install runs. We never touch an existing install - if
+# the appid already has a manifest anywhere, we leave its location alone.
+# NOTE: this is the no-DLL way to pick the drive. Steam's StateFlags format can
+# shift between client versions - verify on your own PC before shipping widely.
+function Set-InstallTarget {
+  param([string]$AppId, [string]$LibPath)
+  if ([string]::IsNullOrWhiteSpace($LibPath)) { return }
+  try {
+    $steam = Get-SteamPath
+    $allLibs = @()
+    if ($steam) {
+      $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+      if (Test-Path $vdf) {
+        foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
+          $allLibs += ($m.Groups[1].Value -replace '\\\\', '\')
+        }
+      }
+      if ($allLibs.Count -eq 0) { $allLibs += $steam }
+    }
+    foreach ($l in $allLibs) {
+      if (Test-Path (Join-Path $l "steamapps\appmanifest_$AppId.acf")) {
+        Write-Log "AppID $AppId already has a manifest - leaving its drive as-is."
+        return
+      }
+    }
+    $sa = Join-Path $LibPath 'steamapps'
+    if (-not (Test-Path $sa)) { New-Item -ItemType Directory -Path $sa -Force | Out-Null }
+    $acf = Join-Path $sa "appmanifest_$AppId.acf"
+    $stub = "`"AppState`"`r`n{`r`n`t`"appid`"`t`t`"$AppId`"`r`n`t`"Universe`"`t`t`"1`"`r`n`t`"StateFlags`"`t`t`"2`"`r`n`t`"installdir`"`t`t`"$AppId`"`r`n`t`"buildid`"`t`t`"0`"`r`n}`r`n"
+    Set-Content -Path $acf -Value $stub -Encoding ASCII
+    Write-Log "Targeting AppID $AppId install to $LibPath"
+  } catch { Write-Log "Could not set install target for ${AppId}: $($_.Exception.Message)" 'WARN' }
+}
+
 Write-Log "Helper running. Polling $ServerUrl every $IntervalSeconds s for SteamID $SteamId."
 Write-Log "Press Ctrl+C to stop (if auto-start is installed it restarts at next login)."
 
@@ -209,7 +246,11 @@ while ($true) {
         if ($cmd.type -eq 'install' -and $cmd.appid) {
           $appid = ($cmd.appid -replace '\D', '')
           if ($appid) {
-            Write-Log "Install request for AppID $appid - launching steam://install/$appid"
+            $lib = ''
+            if ($cmd.PSObject.Properties.Name -contains 'library' -and $cmd.library) { $lib = [string]$cmd.library }
+            if ($lib) { Set-InstallTarget -AppId $appid -LibPath $lib }
+            $where = if ($lib) { " -> $lib" } else { '' }
+            Write-Log "Install request for AppID $appid$where - launching steam://install/$appid"
             try { Start-Process ("steam://install/$appid") }
             catch { Write-Log "Failed to launch Steam for ${appid}: $($_.Exception.Message)" 'ERROR' }
             $lastReport = [datetime]::MinValue  # force a fresh report so progress shows up fast

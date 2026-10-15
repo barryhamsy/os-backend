@@ -63,6 +63,8 @@ db.run(`CREATE TABLE IF NOT EXISTS remote_commands (
   created_at INTEGER NOT NULL
 )`).catch((e) => console.error('[remote_commands] init failed:', e.message));
 db.run(`CREATE INDEX IF NOT EXISTS idx_remote_commands_sid ON remote_commands(steamid)`).catch(() => {});
+// Target Steam library path for an install (added later; ignore "duplicate column").
+db.run(`ALTER TABLE remote_commands ADD COLUMN library TEXT`).catch(() => {});
 
 // Last time each SteamID's helper polled — powers the dashboard "PC online" dot.
 // In-memory is fine: on restart every helper re-announces within one poll.
@@ -2654,17 +2656,22 @@ app.post('/dash/api/remote-install', requireSteam, async (req, res) => {
     const sid = toSteamId64(req.steamid);
     const appId = String((req.body && req.body.appid) || '').replace(/\D/g, '');
     if (!appId) return res.status(400).json({ error: 'appid required' });
+    // Optional target library path (the drive the user picked). Sanity-bounded.
+    let library = String((req.body && req.body.library) || '').trim();
+    if (library.length > 260) library = library.slice(0, 260);
     // Drop anything stale (> 10 min) so a long-offline PC doesn't get a backlog.
     await db.run('DELETE FROM remote_commands WHERE created_at < ?', [Date.now() - 10 * 60 * 1000]).catch(() => {});
-    // De-dupe: don't stack the same pending install.
+    // De-dupe: don't stack the same pending install (refresh its library target).
     const dup = await db.get(
       "SELECT id FROM remote_commands WHERE steamid = ? AND type = 'install' AND appid = ?",
       [sid, appId]
     ).catch(() => null);
-    if (!dup) {
+    if (dup) {
+      await db.run('UPDATE remote_commands SET library = ?, created_at = ? WHERE id = ?', [library || null, Date.now(), dup.id]).catch(() => {});
+    } else {
       await db.run(
-        "INSERT INTO remote_commands (steamid, type, appid, created_at) VALUES (?, 'install', ?, ?)",
-        [sid, appId, Date.now()]
+        "INSERT INTO remote_commands (steamid, type, appid, library, created_at) VALUES (?, 'install', ?, ?, ?)",
+        [sid, appId, library || null, Date.now()]
       );
     }
     const seen = _helperSeen.get(sid) || 0;
@@ -2683,14 +2690,14 @@ app.get('/api/remote/commands/:steamid', async (req, res) => {
     if (!helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
     _helperSeen.set(sid, Date.now());
     const rows = await db.all(
-      'SELECT id, type, appid FROM remote_commands WHERE steamid = ? ORDER BY id ASC LIMIT 50',
+      'SELECT id, type, appid, library FROM remote_commands WHERE steamid = ? ORDER BY id ASC LIMIT 50',
       [sid]
     ).catch(() => []);
     if (rows.length) {
       const ids = rows.map((r) => r.id);
       await db.run(`DELETE FROM remote_commands WHERE id IN (${ids.map(() => '?').join(',')})`, ids).catch(() => {});
     }
-    res.json({ commands: rows.map((r) => ({ type: r.type, appid: r.appid })) });
+    res.json({ commands: rows.map((r) => ({ type: r.type, appid: r.appid, library: r.library || '' })) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
