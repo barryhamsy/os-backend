@@ -957,10 +957,37 @@ function freeGBForPath(p) {
   for (const x of pool) { if ((x.path || x.drive) === p) return x.freeGB; }
   return null;
 }
+// One-time (per browser) heads-up before the first remote install. Resolves true
+// to proceed, false to cancel. "Don't show again" is remembered in localStorage.
+function showRestartNotice() {
+  return new Promise((resolve) => {
+    let hidden = false;
+    try { hidden = localStorage.getItem('ost_hide_restart_notice') === '1'; } catch (_) {}
+    const ov = $('restart-modal');
+    if (hidden || !ov) { resolve(true); return; }
+    const chk = $('restart-dontshow'), ok = $('restart-ok'), cancel = $('restart-cancel');
+    if (chk) chk.checked = false;
+    ov.classList.add('active');
+    function finish(proceed) {
+      if (proceed && chk && chk.checked) { try { localStorage.setItem('ost_hide_restart_notice', '1'); } catch (_) {} }
+      ov.classList.remove('active');
+      if (ok) ok.removeEventListener('click', onOk);
+      if (cancel) cancel.removeEventListener('click', onCancel);
+      resolve(proceed);
+    }
+    function onOk() { finish(true); }
+    function onCancel() { finish(false); }
+    if (ok) ok.addEventListener('click', onOk);
+    if (cancel) cancel.addEventListener('click', onCancel);
+  });
+}
 async function installGame(g, btn) {
   const appid = String(g.appid);
   const target = getInstallTarget();
   if (target === 'remote') {
+    // One-time heads-up that Steam will auto-restart to begin the install.
+    const go = await showRestartNotice();
+    if (!go) return;
     // Warn if the game is bigger than the chosen drive's free space (fall back
     // to the most-free drive when none is explicitly picked).
     const need = parseGB(g.size_gb);
@@ -974,8 +1001,8 @@ async function installGame(g, btn) {
     try {
       const r = await remoteInstall(appid);
       if (r && r.success) {
-        if (r.online) toast(`“${g.name}” sent to your PC — Steam will open the install dialog there.`, 'ok');
-        else toast(`Queued “${g.name}”. Your PC helper is offline — it will install as soon as it’s running.`, 'warn', 4500);
+        if (r.online) toast(`“${g.name}” sent — Steam will restart on your PC to start the install.`, 'ok', 4500);
+        else toast(`Queued “${g.name}”. Your PC is offline — it will install once ONENNABE is running.`, 'warn', 4500);
         refreshRemoteStatus();
       } else {
         toast((r && r.error) || 'Could not queue the install.', 'err');
@@ -1952,6 +1979,23 @@ async function init() {
 }
 init();
 </script>
+<!-- Remote-install heads-up (auto Steam restart) -->
+<div id="restart-modal" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" style="max-width:440px">
+    <h3 style="margin:0 0 12px;color:var(--blue);font-size:17px">Before we install…</h3>
+    <p style="font-size:14px;line-height:1.65;color:#c3d4e2;margin:0 0 16px">
+      Your Steam will <b>automatically restart</b> to start the installation.
+      If you're playing a game right now, the install will begin <b>after you finish</b> your current game.
+    </p>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin-bottom:18px;cursor:pointer">
+      <input type="checkbox" id="restart-dontshow"> Don't show this again
+    </label>
+    <div class="row" style="justify-content:flex-end;gap:8px">
+      <button id="restart-cancel" class="btn btn-ghost" style="width:auto;padding:8px 16px">Cancel</button>
+      <button id="restart-ok" class="btn btn-install" style="width:auto;padding:8px 20px">OK</button>
+    </div>
+  </div>
+</div>
 <div id="toast-wrap"></div>
 </body>
 </html>
