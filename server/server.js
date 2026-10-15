@@ -2615,39 +2615,9 @@ app.get('/dash/api/remote-status', requireSteam, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Personalized one-click setup .bat for the home-PC helper. The signed-in
-// SteamID + token are baked in, so the user just downloads this and
-// double-clicks it on their gaming PC — no PowerShell, no copy-paste. The .bat
-// downloads the current remote-helper.ps1 from this server and runs it with
-// -Install. SteamID (digits) and token (hex) are safe to inline verbatim.
-app.get('/dash/api/remote-setup.bat', requireSteam, (req, res) => {
-  const sid = toSteamId64(req.steamid);
-  const token = helperToken(sid);
-  const srv = SITE_URL;
-  const bat = [
-    '@echo off',
-    'setlocal',
-    'title ONENNABE Remote Install Helper Setup',
-    'set "DIR=%LOCALAPPDATA%\\ONENNABE"',
-    'if not exist "%DIR%" mkdir "%DIR%"',
-    'echo.',
-    'echo   Installing the ONENNABE remote-install helper on this PC...',
-    'echo.',
-    `powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri '${srv}/remote-helper.ps1' -OutFile '%DIR%\\remote-helper.ps1' -UseBasicParsing; exit 0 } catch { Write-Host ('Download failed: ' + $_); exit 1 }"`,
-    'if errorlevel 1 ( echo. & echo   Could not download the helper. Check your internet connection and try again. & echo. & pause & exit /b 1 )',
-    `powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%\\remote-helper.ps1" -Install -ServerUrl "${srv}" -SteamId "${sid}" -Token "${token}"`,
-    'echo.',
-    'echo   Setup complete - you can close this window.',
-    'echo   Games you send from the dashboard will now install on this PC.',
-    'echo.',
-    'pause',
-    '',
-  ].join('\r\n');
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'attachment; filename="ONENNABE-remote-install-setup.bat"');
-  res.setHeader('Cache-Control', 'no-store');
-  res.send(bat);
-});
+// (Removed) /dash/api/remote-setup.bat and the standalone helper — remote install
+// is now built into OpenSteamTool.dll, so installing ONENNABE sets it up. No
+// separate helper download is needed.
 
 // Queue a "send this game to my PC to install" command. Session-authenticated,
 // so a user can only queue to their own SteamID.

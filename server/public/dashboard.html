@@ -321,13 +321,6 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .pc-dot.on i{background:#5ee0a0;box-shadow:0 0 8px rgba(94,224,160,.8)}
 .pc-dot.on{color:#5ee0a0}
 .link-btn{background:none;border:0;color:var(--blue);cursor:pointer;font-size:12px;font-weight:700;padding:0;text-decoration:underline}
-/* Remote setup panel */
-.setup-panel{margin:0 0 12px;padding:14px 16px;border:1px solid var(--line2);border-radius:12px;background:rgba(0,0,0,.3)}
-.setup-panel h4{margin:0 0 8px;font-size:14px;color:var(--blue)}
-.setup-panel ol{margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.7;color:#c3d4e2}
-.setup-panel code,.code-box{font-family:ui-monospace,monospace;font-size:12px}
-.code-box{display:block;background:#05090f;border:1px solid var(--line2);border-radius:8px;
-  padding:9px 11px;margin:6px 0;color:#cfe3f4;white-space:pre-wrap;word-break:break-all}
 /* Toast */
 #toast-wrap{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;
   display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
@@ -572,28 +565,6 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
                 <select id="drive-select" class="sel" title="Which drive to install games onto"></select>
               </label>
               <span id="pc-storage" class="pc-storage" style="display:none"></span>
-              <button id="setup-toggle" class="link-btn" style="display:none">Set up remote install</button>
-            </div>
-
-            <!-- Remote install setup (collapsed by default) -->
-            <div id="setup-panel" class="setup-panel hide">
-              <h4>📡 Install games on your PC from anywhere</h4>
-              <p class="muted" style="font-size:13px;margin:0 0 4px">
-                Run this tiny helper on your gaming PC (the one with Steam). Once it's running, pick
-                <b>My Home PC</b> above and the Install button will start the download on that PC —
-                even when you're on a different network or on your phone.
-              </p>
-              <ol>
-                <li><b>Download</b> your personal setup file:
-                  <a id="helper-dl" href="/dash/api/remote-setup.bat">ONENNABE-remote-install-setup.bat</a>
-                </li>
-                <li>Copy it to your <b>gaming PC</b> and <b>double-click</b> it. It installs the helper,
-                    starts it right away, and sets it to auto-start at every login. That's all — nothing to type.</li>
-              </ol>
-              <a id="helper-dl-btn" href="/dash/api/remote-setup.bat" class="btn btn-install" style="display:inline-flex;width:auto;padding:9px 16px;margin-top:4px">⬇ Download setup file (.bat)</a>
-              <p class="muted" style="font-size:11.5px;margin:10px 0 0">
-                This file contains your personal token — anyone with it could send install requests to your PC. Keep it private.
-              </p>
             </div>
 
             <div id="games" class="grid"></div>
@@ -1020,27 +991,19 @@ async function installGame(g, btn) {
   }
 }
 
-// ── Remote PC status + setup panel ────────────────────────────────────────────
-function buildSetupCmd() {
-  const srv = REMOTE.serverUrl || location.origin;
-  const sid = (ME && ME.steamid) || '';
-  const tok = REMOTE.token || '';
-  return `powershell -NoProfile -ExecutionPolicy Bypass -File .\\remote-helper.ps1 -Install ` +
-         `-ServerUrl "${srv}" -SteamId "${sid}" -Token "${tok}"`;
-}
+// ── Remote PC status ──────────────────────────────────────────────────────────
 function renderRemoteStatusUI() {
   const target = getInstallTarget();
   const dot = $('pc-status');
-  const setupToggle = $('setup-toggle');
-  // The PC status + setup link only matter for the remote target.
+  // The PC status only matters for the remote target.
   if (dot) {
     dot.style.display = target === 'remote' ? '' : 'none';
     dot.classList.toggle('on', !!REMOTE.online);
     const txt = dot.querySelector('.pc-txt');
-    if (txt) txt.textContent = REMOTE.online ? 'Home PC online' : 'Home PC offline';
+    if (txt) txt.textContent = REMOTE.online
+      ? 'Home PC online'
+      : 'Home PC offline — install ONENNABE on it';
   }
-  if (setupToggle) setupToggle.style.display = target === 'remote' ? '' : 'none';
-  const cmd = $('setup-cmd'); if (cmd) cmd.textContent = buildSetupCmd();
   renderDriveSelect();
   renderStorage();
   applyMachineToCards();
@@ -1147,7 +1110,6 @@ function wireInstallBar() {
       seg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
       renderRemoteStatusUI();
       if (v === 'remote') refreshRemoteStatus();
-      else { const sp = $('setup-panel'); if (sp) sp.classList.add('hide'); }
     });
   }
   const driveSel = $('drive-select');
@@ -1155,19 +1117,6 @@ function wireInstallBar() {
     try { localStorage.setItem('ost_install_lib', driveSel.value || ''); } catch (_) {}
     const label = driveSel.options[driveSel.selectedIndex] ? driveSel.options[driveSel.selectedIndex].textContent : driveSel.value;
     toast(driveSel.value ? `New installs will go to ${label}.` : 'New installs will use Steam’s default drive.', 'ok');
-  });
-  const setupToggle = $('setup-toggle');
-  if (setupToggle) setupToggle.addEventListener('click', () => {
-    const sp = $('setup-panel');
-    if (sp) { sp.classList.toggle('hide'); if (!sp.classList.contains('hide')) refreshRemoteStatus(); }
-  });
-  const copyBtn = $('copy-setup');
-  if (copyBtn) copyBtn.addEventListener('click', () => {
-    const cmd = buildSetupCmd();
-    navigator.clipboard.writeText(cmd).then(() => {
-      const o = copyBtn.textContent; copyBtn.textContent = '✓ Copied!';
-      setTimeout(() => { copyBtn.textContent = o; }, 2000);
-    }).catch(() => toast('Copy failed — select the command manually.', 'warn'));
   });
 }
 
@@ -1867,7 +1816,7 @@ async function init() {
   // Install-target toggle + remote PC status.
   wireInstallBar();
   renderRemoteStatusUI();
-  if (getInstallTarget() === 'remote') refreshRemoteStatus();
+  refreshRemoteStatus();
   startRemotePolling();
 
   // 1-Click PC Setup Buttons (Option 1 & Option 2)
