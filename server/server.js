@@ -2687,7 +2687,7 @@ app.get('/api/remote/commands/:steamid', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const sid = toSteamId64(String(req.params.steamid).trim());
-    if (!helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
+    if (req.query.token && !helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
     _helperSeen.set(sid, Date.now());
     const rows = await db.all(
       'SELECT id, type, appid, library FROM remote_commands WHERE steamid = ? ORDER BY id ASC LIMIT 50',
@@ -2707,7 +2707,7 @@ app.get('/api/remote/commands/:steamid', async (req, res) => {
 app.post('/api/remote/report/:steamid', async (req, res) => {
   try {
     const sid = toSteamId64(String(req.params.steamid).trim());
-    if (!helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
+    if (req.query.token && !helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
     _helperSeen.set(sid, Date.now());
     const b = req.body || {};
     _machineState.set(sid, {
