@@ -1093,7 +1093,13 @@ function renderStorage() {
 function applyMachineToCards() {
   const installs = (REMOTE.machine && REMOTE.machine.installs) || [];
   const byId = {};
-  installs.forEach((i) => { byId[String(i.appid)] = i; });
+  installs.forEach((i) => {
+    const k = String(i.appid);
+    const prev = byId[k];
+    // A game can have a manifest on two drives (old copy + new install) -
+    // prefer the one that's actively installing so the live bar wins.
+    if (!prev || (i.installing && !prev.installing)) byId[k] = i;
+  });
   document.querySelectorAll('#games .game').forEach((card) => {
     const btn = card.querySelector('[data-appid]');
     if (!btn) return;
@@ -1125,7 +1131,9 @@ let _remoteTimer = null;
 function startRemotePolling() {
   if (_remoteTimer) clearInterval(_remoteTimer);
   // Poll every 5s while on the remote target so the progress bars stay live.
-  _remoteTimer = setInterval(() => { if (getInstallTarget() === 'remote') refreshRemoteStatus(); }, 5000);
+  // Poll steadily whenever signed in so install progress keeps updating even
+  // when the toggle isn't on "My Home PC".
+  _remoteTimer = setInterval(() => { refreshRemoteStatus(); }, 5000);
 }
 function wireInstallBar() {
   const seg = $('install-seg');
@@ -1753,7 +1761,7 @@ async function loadGames(page, shouldScroll = false) {
     games.forEach(g => frag.appendChild(gameCard(g)));
     $('games').appendChild(frag);
     applyRatingFilter(); // honor an active rating filter on the fresh cards
-    if (getInstallTarget() === 'remote') applyMachineToCards(); // paint live progress on fresh cards
+    applyMachineToCards(); // paint live progress on fresh cards
     // Pager: always stay visible
     curPage = r.page || 1;
     const pages = r.pages || 1;
