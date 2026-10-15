@@ -2651,6 +2651,22 @@ app.post('/dash/api/remote-install', requireSteam, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Queue a "launch this game on my PC" command (for the ▶ Play button).
+app.post('/dash/api/remote-launch', requireSteam, async (req, res) => {
+  try {
+    const sid = toSteamId64(req.steamid);
+    const appId = String((req.body && req.body.appid) || '').replace(/\D/g, '');
+    if (!appId) return res.status(400).json({ error: 'appid required' });
+    await db.run('DELETE FROM remote_commands WHERE created_at < ?', [Date.now() - 10 * 60 * 1000]).catch(() => {});
+    await db.run(
+      "INSERT INTO remote_commands (steamid, type, appid, created_at) VALUES (?, 'launch', ?, ?)",
+      [sid, appId, Date.now()]
+    );
+    const seen = _helperSeen.get(sid) || 0;
+    res.json({ success: true, queued: true, online: (Date.now() - seen) < HELPER_ONLINE_MS });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUBLIC (token-gated): the home-PC helper polls this. It records the poll for
 // the "PC online" indicator, then pops and returns any pending commands.
 app.get('/api/remote/commands/:steamid', async (req, res) => {

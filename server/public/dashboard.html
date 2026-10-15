@@ -297,6 +297,10 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 .btn-install{background:linear-gradient(135deg,var(--blue2),var(--blue3));color:#fff!important;
   border:1px solid rgba(102,192,244,.55);box-shadow:0 6px 18px rgba(26,159,255,.35)}
 .btn-install:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-1px);box-shadow:0 8px 24px rgba(26,159,255,.5)}
+/* Play button (shown when the game is already installed on the PC) */
+.btn-play{background:linear-gradient(135deg,var(--green),var(--green2));color:#052014!important;
+  border:1px solid rgba(94,224,160,.55);box-shadow:0 6px 18px rgba(47,169,104,.35);font-weight:800}
+.btn-play:hover:not(:disabled){filter:brightness(1.08);transform:translateY(-1px);box-shadow:0 8px 24px rgba(47,169,104,.5)}
 /* PC storage summary (drives / Steam libraries + free space) */
 .pc-storage{display:inline-flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
 .pc-storage .dr{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--line);border-radius:8px;background:rgba(0,0,0,.25)}
@@ -1086,6 +1090,25 @@ function renderStorage() {
   el.innerHTML = parts.length ? parts.join('') : '';
 }
 // Paint a live progress bar on any visible card whose game is installing.
+// Launch an installed game: on the gaming PC itself (This PC) via steam://run,
+// or on the home PC remotely by queueing a launch command the DLL runs.
+async function playGame(g, btn) {
+  const appid = String(g.appid);
+  if (getInstallTarget() === 'remote') {
+    try {
+      const r = await api('/dash/api/remote-launch', { method: 'POST', body: JSON.stringify({ appid }) });
+      if (r && r.success) toast(`Launching “${g.name}” on your PC…`, 'ok');
+      else toast((r && r.error) || 'Could not launch.', 'err');
+    } catch (e) { if (e.message !== 'unauth') toast('Launch failed: ' + e.message, 'err'); }
+  } else {
+    const f = document.createElement('iframe');
+    f.style.display = 'none'; f.src = 'steam://run/' + appid;
+    document.body.appendChild(f); setTimeout(() => f.remove(), 2000);
+    toast(`Launching “${g.name}”…`, 'ok');
+  }
+}
+// Keep each unlocked card's action in sync with the PC's real state:
+//   installing -> progress bar | installed -> ▶ Play | otherwise -> ⬇ Install
 function applyMachineToCards() {
   const installs = (REMOTE.machine && REMOTE.machine.installs) || [];
   const byId = {};
@@ -1097,19 +1120,37 @@ function applyMachineToCards() {
     if (!prev || (i.installing && !prev.installing)) byId[k] = i;
   });
   document.querySelectorAll('#games .game').forEach((card) => {
-    const btn = card.querySelector('[data-appid]');
-    if (!btn) return;
-    const appid = btn.getAttribute('data-appid');
-    const info = byId[appid];
+    const g = card._game;
+    const row = card.querySelector('.card-btn-row');
+    if (!g || !row) return; // only unlocked cards have the install/remove row
+    const info = byId[String(g.appid)];
     const body = card.querySelector('.body');
     let bar = card.querySelector('.card-progress');
+    let actionBtn = row.querySelector('.btn-install, .btn-play');
+
     if (info && info.installing) {
+      if (actionBtn) actionBtn.style.display = 'none';
       if (!bar) { bar = document.createElement('div'); bar.className = 'card-progress'; body.appendChild(bar); }
       const pct = Math.max(0, Math.min(100, Number(info.pct) || 0));
       bar.innerHTML = `<div class="cp-track"><div class="cp-fill" style="width:${pct}%"></div></div>` +
                       `<div class="cp-txt">Installing ${pct}%${info.drive ? ' · ' + esc(info.drive) : ''}</div>`;
-    } else if (bar) {
-      bar.remove();
+      return;
+    }
+    if (bar) bar.remove();
+    if (!actionBtn) return;
+    actionBtn.style.display = '';
+    const wantPlay = !!(info && info.installed);
+    const isPlay = actionBtn.classList.contains('btn-play');
+    if (wantPlay && !isPlay) {
+      const b = document.createElement('button');
+      b.className = 'btn btn-play'; b.setAttribute('data-appid', g.appid); b.textContent = '▶ Play';
+      b.addEventListener('click', () => playGame(g, b));
+      actionBtn.replaceWith(b);
+    } else if (!wantPlay && isPlay) {
+      const b = document.createElement('button');
+      b.className = 'btn btn-install'; b.setAttribute('data-appid', g.appid); b.textContent = '⬇ Install';
+      b.addEventListener('click', () => installGame(g, b));
+      actionBtn.replaceWith(b);
     }
   });
 }
@@ -1256,6 +1297,7 @@ async function loadInfo(el, appid) {
 }
 
 function fillCardBody(el, g) {
+  el._game = g; // let applyMachineToCards swap Install <-> Play from PC state
   const has = unlocked.has(String(g.appid));
   if (g.adult) el.dataset.adult = '1';
   const body = el.querySelector('.body');
