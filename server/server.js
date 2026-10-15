@@ -2720,6 +2720,24 @@ app.post('/api/remote/report/:steamid', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// DEBUG (temporary, public): shows exactly what the server has for a SteamID so
+// we can see whether the DLL's report arrived and what install progress it holds.
+// Open https://onennabe.duckdns.org/api/remote/debug/<steamid64> in a browser.
+app.get('/api/remote/debug/:steamid', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const sid = toSteamId64(String(req.params.steamid).trim());
+  const seen = _helperSeen.get(sid) || 0;
+  const m = _machineState.get(sid) || null;
+  res.json({
+    steamid: sid,
+    online: (Date.now() - seen) < HELPER_ONLINE_MS,
+    lastReportSecondsAgo: m && m.ts ? Math.round((Date.now() - m.ts) / 1000) : null,
+    lastSeenSecondsAgo: seen ? Math.round((Date.now() - seen) / 1000) : null,
+    libraries: m ? m.libraries : null,
+    installs: m ? m.installs : null,
+  });
+});
+
 // ── Steam screenshot proxy (landscape fallback when no header/cover exists) ───
 // The dashboard tries the header capsule first; if a game has none, it falls
 // back here. We query Steam's appdetails once per appid and 302 to the first
