@@ -304,7 +304,13 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 /* Live install progress bar on a card */
 .card-progress{margin-top:8px}
 .cp-track{height:7px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
-.cp-fill{height:100%;background:linear-gradient(90deg,var(--blue2),var(--green));transition:width .5s ease}
+.cp-fill{height:100%;background:linear-gradient(90deg,var(--blue2),var(--green));transition:width .5s ease;position:relative;overflow:hidden}
+/* Moving shine so the bar reads as "working" even while the % holds between
+   Steam's disk flushes (Steam only writes progress on pause/resume/complete). */
+.cp-fill::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.45) 50%,transparent 100%);
+  animation:cpShine 1.3s linear infinite}
+@keyframes cpShine{to{transform:translateX(100%)}}
 .cp-txt{font-size:11px;color:var(--blue);margin-top:3px;font-weight:700}
 .card-btn-row{display:flex;gap:7px;margin-top:auto}
 .card-btn-row .btn{margin-top:0;flex:1}
