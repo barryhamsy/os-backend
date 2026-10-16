@@ -1119,6 +1119,9 @@ function applyMachineToCards() {
     // prefer the one that's actively installing so the live bar wins.
     if (!prev || (i.installing && !prev.installing)) byId[k] = i;
   });
+  // Only treat "game absent from the report" as meaningful when we actually have
+  // a machine report in hand; a failed/empty poll must not disturb the UI.
+  const haveReport = !!(REMOTE.machine && REMOTE.machine.installs);
   document.querySelectorAll('#games .game').forEach((card) => {
     const g = card._game;
     const row = card.querySelector('.card-btn-row');
@@ -1128,25 +1131,57 @@ function applyMachineToCards() {
     let bar = card.querySelector('.card-progress');
     let actionBtn = row.querySelector('.btn-install, .btn-play');
 
+    // ── Actively installing: show the live progress bar ──────────────────────
     if (info && info.installing) {
+      card._miss = 0;
       if (actionBtn) actionBtn.style.display = 'none';
-      if (!bar) { bar = document.createElement('div'); bar.className = 'card-progress'; body.appendChild(bar); }
       const pct = Math.max(0, Math.min(100, Number(info.pct) || 0));
-      bar.innerHTML = `<div class="cp-track"><div class="cp-fill" style="width:${pct}%"></div></div>` +
-                      `<div class="cp-txt">Installing ${pct}%${info.drive ? ' · ' + esc(info.drive) : ''}</div>`;
+      const label = `Installing ${pct}%${info.drive ? ' · ' + esc(info.drive) : ''}`;
+      // Build the bar ONCE, then only nudge width/text in place. Rewriting
+      // innerHTML every poll re-creates .cp-fill and restarts its width
+      // transition + shimmer each tick, which reads as flicker.
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'card-progress';
+        bar.innerHTML = '<div class="cp-track"><div class="cp-fill"></div></div><div class="cp-txt"></div>';
+        body.appendChild(bar);
+      }
+      const fill = bar.querySelector('.cp-fill');
+      const txt = bar.querySelector('.cp-txt');
+      if (fill) fill.style.width = pct + '%';
+      if (txt) txt.textContent = label;
       return;
     }
+
+    // ── Not installing ───────────────────────────────────────────────────────
     if (bar) bar.remove();
     if (!actionBtn) return;
     actionBtn.style.display = '';
-    const wantPlay = !!(info && info.installed);
+
+    // Decide the desired button. Absence from the report (info undefined) only
+    // counts once we HAVE a report, and we require two consecutive misses before
+    // reverting Play -> Install so a single transient drop (e.g. an .acf momentarily
+    // locked by Steam) doesn't make the button flicker.
+    let wantPlay;
+    if (info) {
+      card._miss = 0;
+      wantPlay = !!info.installed;
+    } else if (!haveReport) {
+      return; // no data this cycle - leave the button exactly as it is
+    } else {
+      card._miss = (card._miss || 0) + 1;
+      if (card._miss < 2) return; // tolerate one missing poll
+      wantPlay = false;
+    }
+
     const isPlay = actionBtn.classList.contains('btn-play');
-    if (wantPlay && !isPlay) {
+    if (wantPlay === isPlay) return; // already correct - don't touch the DOM
+    if (wantPlay) {
       const b = document.createElement('button');
       b.className = 'btn btn-play'; b.setAttribute('data-appid', g.appid); b.textContent = '▶ Play';
       b.addEventListener('click', () => playGame(g, b));
       actionBtn.replaceWith(b);
-    } else if (!wantPlay && isPlay) {
+    } else {
       const b = document.createElement('button');
       b.className = 'btn btn-install'; b.setAttribute('data-appid', g.appid); b.textContent = '⬇ Install';
       b.addEventListener('click', () => installGame(g, b));
