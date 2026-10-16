@@ -912,7 +912,7 @@ function toast(msg, kind = 'ok', ms = 3200) {
 // ── Install to Steam (local protocol or remote queue) ─────────────────────────
 // Remembered per-browser: 'this' = open Steam on the device looking at this page
 // (steam://install), 'remote' = queue the install for the helper on the home PC.
-let REMOTE = { token: '', serverUrl: '', online: false, machine: null };
+let REMOTE = { token: '', serverUrl: '', online: false, machine: null, appState: {}, _sig: '' };
 // Parse a GB number out of a catalog size value ("45 GB", "45", 45, "1.2 TB").
 function parseGB(v) {
   if (v == null) return null;
@@ -1109,8 +1109,20 @@ async function playGame(g, btn) {
 }
 // Keep each unlocked card's action in sync with the PC's real state:
 //   installing -> progress bar | installed -> ▶ Play | otherwise -> ⬇ Install
-function applyMachineToCards() {
-  const installs = (REMOTE.machine && REMOTE.machine.installs) || [];
+// Resolve each game's state ONCE per distinct machine report (not per 5s render).
+// The poll re-fetches every 5s but the PC only posts a fresh report every ~8s, so
+// consecutive fetches often carry the identical report; and any single report can
+// momentarily miss a game (its .acf locked mid-write) or read a transient flag.
+// Re-deriving the button straight from each fetch is what makes it flip Install
+// <-> Play. Instead we fold reports into a sticky per-appid map with hysteresis,
+// gated on the report actually changing, and the renderer just paints that map.
+function reconcileInstallState() {
+  const installs = (REMOTE.machine && REMOTE.machine.installs) || null;
+  if (!installs) return; // no report this cycle - keep the resolved state as-is
+  const sig = JSON.stringify(installs);
+  if (sig === REMOTE._sig) return; // identical report (stale re-fetch) - nothing new
+  REMOTE._sig = sig;
+
   const byId = {};
   installs.forEach((i) => {
     const k = String(i.appid);
@@ -1119,24 +1131,52 @@ function applyMachineToCards() {
     // prefer the one that's actively installing so the live bar wins.
     if (!prev || (i.installing && !prev.installing)) byId[k] = i;
   });
-  // Only treat "game absent from the report" as meaningful when we actually have
-  // a machine report in hand; a failed/empty poll must not disturb the UI.
-  const haveReport = !!(REMOTE.machine && REMOTE.machine.installs);
+
+  const MISS_LIMIT = 3; // distinct reports a game must be absent before we drop it
+  const st = REMOTE.appState;
+  // Advance every appid we currently track, plus everything in this report.
+  const ids = new Set(Object.keys(st));
+  Object.keys(byId).forEach((k) => ids.add(k));
+  ids.forEach((k) => {
+    const info = byId[k];
+    const cur = st[k] || (st[k] = { state: 'install', pct: 0, drive: '', miss: 0 });
+    if (info && info.installing) {
+      cur.state = 'installing';
+      cur.pct = Math.max(0, Math.min(100, Number(info.pct) || 0));
+      cur.drive = info.drive || '';
+      cur.miss = 0;
+    } else if (info && info.installed) {
+      cur.state = 'play';
+      cur.miss = 0;
+    } else if (info) {
+      cur.state = 'install'; // present but neither installed nor installing
+      cur.miss = 0;
+    } else {
+      // Absent from this report. Don't regress immediately - a confirmed state
+      // (play/installing) only falls back to install after MISS_LIMIT reports.
+      cur.miss = (cur.miss || 0) + 1;
+      if (cur.state !== 'install' && cur.miss >= MISS_LIMIT) cur.state = 'install';
+    }
+  });
+}
+
+function applyMachineToCards() {
+  reconcileInstallState();
+  const st = REMOTE.appState;
   document.querySelectorAll('#games .game').forEach((card) => {
     const g = card._game;
     const row = card.querySelector('.card-btn-row');
     if (!g || !row) return; // only unlocked cards have the install/remove row
-    const info = byId[String(g.appid)];
+    const resolved = st[String(g.appid)];
     const body = card.querySelector('.body');
     let bar = card.querySelector('.card-progress');
     let actionBtn = row.querySelector('.btn-install, .btn-play');
 
     // ── Actively installing: show the live progress bar ──────────────────────
-    if (info && info.installing) {
-      card._miss = 0;
+    if (resolved && resolved.state === 'installing') {
       if (actionBtn) actionBtn.style.display = 'none';
-      const pct = Math.max(0, Math.min(100, Number(info.pct) || 0));
-      const label = `Installing ${pct}%${info.drive ? ' · ' + esc(info.drive) : ''}`;
+      const pct = resolved.pct;
+      const label = `Installing ${pct}%${resolved.drive ? ' · ' + esc(resolved.drive) : ''}`;
       // Build the bar ONCE, then only nudge width/text in place. Rewriting
       // innerHTML every poll re-creates .cp-fill and restarts its width
       // transition + shimmer each tick, which reads as flicker.
@@ -1158,22 +1198,10 @@ function applyMachineToCards() {
     if (!actionBtn) return;
     actionBtn.style.display = '';
 
-    // Decide the desired button. Absence from the report (info undefined) only
-    // counts once we HAVE a report, and we require two consecutive misses before
-    // reverting Play -> Install so a single transient drop (e.g. an .acf momentarily
-    // locked by Steam) doesn't make the button flicker.
-    let wantPlay;
-    if (info) {
-      card._miss = 0;
-      wantPlay = !!info.installed;
-    } else if (!haveReport) {
-      return; // no data this cycle - leave the button exactly as it is
-    } else {
-      card._miss = (card._miss || 0) + 1;
-      if (card._miss < 2) return; // tolerate one missing poll
-      wantPlay = false;
-    }
-
+    // No resolved state yet (never seen in any report) - leave the button as the
+    // card was built (Install) and don't touch the DOM.
+    if (!resolved) return;
+    const wantPlay = resolved.state === 'play';
     const isPlay = actionBtn.classList.contains('btn-play');
     if (wantPlay === isPlay) return; // already correct - don't touch the DOM
     if (wantPlay) {
