@@ -308,13 +308,18 @@ input.key:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(102,192,244,.
 /* Live install progress bar on a card */
 .card-progress{margin-top:8px}
 .cp-track{height:7px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
-.cp-fill{height:100%;background:linear-gradient(90deg,var(--blue2),var(--green));transition:width .5s ease;position:relative;overflow:hidden}
-/* Moving shine so the bar reads as "working" even while the % holds between
-   Steam's disk flushes (Steam only writes progress on pause/resume/complete). */
-.cp-fill::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
-  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.45) 50%,transparent 100%);
-  animation:cpShine 1.3s linear infinite}
-@keyframes cpShine{to{transform:translateX(100%)}}
+/* Indeterminate "working" bar - a segment that sweeps across the track. We do
+   NOT show a percentage: Steam only flushes progress to disk on pause/resume/
+   complete, so a disk-polled % jumps around and can't be made smooth. A sweeping
+   bar reads as "downloading" honestly without any number to jitter. */
+.cp-indet{position:absolute;top:0;left:0;height:100%;width:40%;border-radius:5px;
+  background:linear-gradient(90deg,var(--blue2),var(--green));
+  animation:cpSweep 1.25s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes cpSweep{
+  0%{left:-40%;width:40%}
+  50%{width:55%}
+  100%{left:100%;width:40%}}
+.cp-track{position:relative}
 .cp-txt{font-size:11px;color:var(--blue);margin-top:3px;font-weight:700}
 .card-btn-row{display:flex;gap:7px;margin-top:auto}
 .card-btn-row .btn{margin-top:0;flex:1}
@@ -1108,14 +1113,18 @@ async function playGame(g, btn) {
   }
 }
 // Keep each unlocked card's action in sync with the PC's real state:
-//   installing -> progress bar | installed -> ▶ Play | otherwise -> ⬇ Install
-// Resolve each game's state ONCE per distinct machine report (not per 5s render).
-// The poll re-fetches every 5s but the PC only posts a fresh report every ~8s, so
-// consecutive fetches often carry the identical report; and any single report can
-// momentarily miss a game (its .acf locked mid-write) or read a transient flag.
-// Re-deriving the button straight from each fetch is what makes it flip Install
-// <-> Play. Instead we fold reports into a sticky per-appid map with hysteresis,
-// gated on the report actually changing, and the renderer just paints that map.
+//   installing -> animated bar | installed -> ▶ Play | otherwise -> ⬇ Install
+//
+// The state is resolved MONOTONICALLY and only ever moves forward:
+//   install -> installing -> play   (and install -> play directly).
+// It never walks backward on a single report, which is what made the button
+// flip Install<->Play: the 5s poll re-fetches faster than the PC posts (~8s),
+// reports repeat, and any one report can momentarily miss a game (its .acf
+// locked mid-write). Once a game is confirmed installed it STAYS ▶ Play for the
+// session; a download that's cancelled clears only after a long, sustained gap.
+// We also show NO percentage - Steam only flushes progress to disk on pause/
+// resume/complete, so a disk-polled % can't be made smooth. An indeterminate
+// sweeping bar reads as "downloading" with nothing to jitter.
 function reconcileInstallState() {
   const installs = (REMOTE.machine && REMOTE.machine.installs) || null;
   if (!installs) return; // no report this cycle - keep the resolved state as-is
@@ -1128,34 +1137,34 @@ function reconcileInstallState() {
     const k = String(i.appid);
     const prev = byId[k];
     // A game can have a manifest on two drives (old copy + new install) -
-    // prefer the one that's actively installing so the live bar wins.
+    // prefer the one that's actively installing so the bar wins.
     if (!prev || (i.installing && !prev.installing)) byId[k] = i;
   });
 
-  const MISS_LIMIT = 3; // distinct reports a game must be absent before we drop it
+  const CANCEL_DROP = 8; // distinct reports an 'installing' game must stay gone before we clear it
   const st = REMOTE.appState;
-  // Advance every appid we currently track, plus everything in this report.
   const ids = new Set(Object.keys(st));
   Object.keys(byId).forEach((k) => ids.add(k));
   ids.forEach((k) => {
     const info = byId[k];
-    const cur = st[k] || (st[k] = { state: 'install', pct: 0, drive: '', miss: 0 });
+    const cur = st[k] || (st[k] = { state: 'install', drive: '', miss: 0 });
+    if (cur.state === 'play') return;                       // installed is sticky for the session
+    if (info && info.installed) { cur.state = 'play'; cur.miss = 0; return; }
     if (info && info.installing) {
       cur.state = 'installing';
-      cur.pct = Math.max(0, Math.min(100, Number(info.pct) || 0));
       cur.drive = info.drive || '';
       cur.miss = 0;
-    } else if (info && info.installed) {
-      cur.state = 'play';
-      cur.miss = 0;
-    } else if (info) {
-      cur.state = 'install'; // present but neither installed nor installing
-      cur.miss = 0;
-    } else {
-      // Absent from this report. Don't regress immediately - a confirmed state
-      // (play/installing) only falls back to install after MISS_LIMIT reports.
+      return;
+    }
+    // Here: either absent, or present with neither flag (e.g. a transient read).
+    // Don't downgrade an 'installing' card off a blip - only a sustained gap
+    // (download cancelled) clears it back to Install.
+    if (cur.state === 'installing') {
       cur.miss = (cur.miss || 0) + 1;
-      if (cur.state !== 'install' && cur.miss >= MISS_LIMIT) cur.state = 'install';
+      if (cur.miss >= CANCEL_DROP) { cur.state = 'install'; cur.miss = 0; }
+    } else {
+      cur.state = 'install';
+      cur.miss = 0;
     }
   });
 }
@@ -1172,24 +1181,20 @@ function applyMachineToCards() {
     let bar = card.querySelector('.card-progress');
     let actionBtn = row.querySelector('.btn-install, .btn-play');
 
-    // ── Actively installing: show the live progress bar ──────────────────────
+    // ── Actively installing: show the indeterminate sweeping bar (no %) ───────
     if (resolved && resolved.state === 'installing') {
       if (actionBtn) actionBtn.style.display = 'none';
-      const pct = resolved.pct;
-      const label = `Installing ${pct}%${resolved.drive ? ' · ' + esc(resolved.drive) : ''}`;
-      // Build the bar ONCE, then only nudge width/text in place. Rewriting
-      // innerHTML every poll re-creates .cp-fill and restarts its width
-      // transition + shimmer each tick, which reads as flicker.
+      const label = `Installing${resolved.drive ? ' · ' + esc(resolved.drive) : '…'}`;
+      // Build the bar ONCE; nothing about it changes per poll, so there is no
+      // width or % to re-animate and nothing to flicker.
       if (!bar) {
         bar = document.createElement('div');
         bar.className = 'card-progress';
-        bar.innerHTML = '<div class="cp-track"><div class="cp-fill"></div></div><div class="cp-txt"></div>';
+        bar.innerHTML = '<div class="cp-track"><div class="cp-indet"></div></div><div class="cp-txt"></div>';
         body.appendChild(bar);
       }
-      const fill = bar.querySelector('.cp-fill');
       const txt = bar.querySelector('.cp-txt');
-      if (fill) fill.style.width = pct + '%';
-      if (txt) txt.textContent = label;
+      if (txt && txt.textContent !== label) txt.textContent = label;
       return;
     }
 
