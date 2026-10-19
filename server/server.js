@@ -8,6 +8,25 @@ const fs = require('fs');
 const crypto = require('crypto');
 const db = require('./db');
 
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+// Throttle high-frequency public poll endpoints so a burst of clients can't
+// spike CPU. 120 req / 60 s per IP ≈ 2 req/s sustained — well above any single
+// legitimate user's need. Adjust windowMs / max as traffic grows.
+let rateLimit;
+try { rateLimit = require('express-rate-limit'); } catch (_) { rateLimit = null; }
+const _pollRateLimiter = rateLimit ? rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — please slow down your polling interval' },
+  skip: (req) => {
+    // Never rate-limit internal loopback requests
+    const ip = req.ip || '';
+    return ip === '127.0.0.1' || ip === '::1' || ip.startsWith('::ffff:127.');
+  },
+}) : (req, res, next) => next();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'ost-secret-jwt-key-change-in-production-2026';
@@ -901,11 +920,12 @@ let _manifestEpoch = 0;
 // is bumped. When it changes, the DLL runs a full sync + manifest refresh.
 // Mirrors the exact sources /api/entitlements unions (keys for both the 32- and
 // 64-bit id, member_unlocks for the SteamID64).
-app.get('/api/entitlements-version/:steamid', async (req, res) => {
+app.get('/api/entitlements-version/:steamid', _pollRateLimiter, async (req, res) => {
   try {
     let id = String(req.params.steamid).trim();
     const cached = _entitlementsVersionCache.get(id);
-    if (cached && (Date.now() - cached.time < 1500) && cached.epoch === _manifestEpoch) {
+    // Cache for 10 s (was 1.5 s) — cuts DB hits ~6× without slowing down real change detection
+    if (cached && (Date.now() - cached.time < 10000) && cached.epoch === _manifestEpoch) {
       res.set('Cache-Control', 'no-store');
       return res.json({ v: cached.v });
     }
@@ -2669,7 +2689,7 @@ app.post('/dash/api/remote-launch', requireSteam, async (req, res) => {
 
 // PUBLIC (token-gated): the home-PC helper polls this. It records the poll for
 // the "PC online" indicator, then pops and returns any pending commands.
-app.get('/api/remote/commands/:steamid', async (req, res) => {
+app.get('/api/remote/commands/:steamid', _pollRateLimiter, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const sid = toSteamId64(String(req.params.steamid).trim());
@@ -2690,7 +2710,7 @@ app.get('/api/remote/commands/:steamid', async (req, res) => {
 // PUBLIC (token-gated): the helper POSTs the PC's drives, Steam libraries and
 // live install progress here. Kept in memory and surfaced to the dashboard via
 // /dash/api/remote-status. Also counts as a poll (keeps the "online" dot green).
-app.post('/api/remote/report/:steamid', async (req, res) => {
+app.post('/api/remote/report/:steamid', _pollRateLimiter, async (req, res) => {
   try {
     const sid = toSteamId64(String(req.params.steamid).trim());
     if (req.query.token && !helperTokenOk(sid, req.query.token)) return res.status(403).json({ error: 'bad token' });
