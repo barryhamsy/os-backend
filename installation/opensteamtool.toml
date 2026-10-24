@@ -59,7 +59,6 @@ failover = true
 #     end
 #     return nil
 # end
-url = "20770407"
 
 # HTTP timeouts for manifest requests (milliseconds).
 # Each value must be within [1, 15000] (the whole-fetch budget);
