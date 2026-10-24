@@ -1,21 +1,35 @@
 # opensteamtool.toml — OpenSteamTool configuration
 # Place at: <Steam>/opensteamtool.toml
-# This file is read once at startup. Restart Steam after changes.
+# This file is loaded at startup and hot-reloaded after changes.
 
 [log]
 # Log verbosity for all log files (Debug build only).
 # Valid: trace, debug, info, warn, error
-level = "info"
+level = "debug"
 
 [manifest]
 # Which upstream API to query for depot manifest request codes.
-#   "opensteamtool" → https://manifest.opensteamtool.com/{gid}   (default)
-#   "manifestdex"   → https://manifest.manifestdex.com/{gid}
+#   "20770407"      → https://20770407.xyz/manifest/{depotId}/{gid} (default)
+#   "SDM"           → https://steamapi.993499094.xyz/manifest/{depotId}/{gid}
+#   "manifestdex"   → https://manifest.manifestdex.com/{gid} (requires User-Agent: ManifestDeX/1.0, sent automatically)
 #   "wudrm"         → http://gmrc.wudrm.com/manifest/{gid} (recommended for China users)
 #   "steamrun"      → https://manifest.steam.run/api/manifest/{gid}
+#   "opensteamtool" → https://manifest.opensteamtool.com/{gid}
 # If <Steam>/config/lua/manifest.lua defines fetch_manifest_code(gid) or
 # fetch_manifest_code_ex(app_id, depot_id, gid), those Lua functions take
 # priority over the url setting below.
+#
+# url only selects the first upstream to try. When failover is enabled and
+# that upstream fails, the remaining upstreams are tried in table order;
+# the configured url stays the first choice for the next fetch.
+# An upstream that just failed is skipped for 60 s. The preferred
+# upstream keeps its position regardless of failover results.
+url = "20770407"
+
+# Failover across manifest upstreams. true (default) tries the next
+# upstream when the preferred one fails; false only queries url above.
+# Hot-reloaded, no restart required.
+failover = true
 #
 # --- manifest.lua reference ---
 # The C++ side provides http_get(url [, headers]) and
@@ -45,9 +59,13 @@ level = "info"
 #     end
 #     return nil
 # end
-url = "manifestdex"
+url = "20770407"
 
 # HTTP timeouts for manifest requests (milliseconds).
+# Each value must be within [1, 15000] (the whole-fetch budget);
+# values outside that range are clamped with a warning in the log.
+# One fetch tries several upstreams in turn and all attempts share
+# the 15000 ms budget.
 # timeout_resolve_ms  — DNS resolution        (default: 5000)
 # timeout_connect_ms  — TCP handshake          (default: 5000)
 # timeout_send_ms     — request transmission   (default: 10000)
@@ -56,6 +74,19 @@ timeout_resolve_ms = 5000
 timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
+
+[stats]
+# Automatically query https://stats.opensteamtool.com/{appid} for a recommended
+# SteamID when no Lua setStat(appid, "steamid") override exists.
+# Priority: setStat > stats API when enabled and valid > hardcoded preset SteamID.
+enable_api = true
+
+[presence]
+# How unlocked games are shown to friends.
+#   "spacewar" → broadcast the real game name (default)
+#   "none"     → skip the name broadcast patches. Unowned games are then
+#                invisible to friends; -onlinefix games fall back to Spacewar.
+display = "spacewar"
 
 # Additional Lua config directories (optional).
 # Files are loaded after the default <Steam>/config/lua folder.
@@ -66,24 +97,36 @@ timeout_recv_ms    = 10000
 [lua]
 # paths = []
 
+[inject]
+# Optional library injection into game processes.
+# The injected library must match the target process architecture.
+enabled = false
+# library_x64 = "OpenSteamTool.GameHook.x64.dll"
+# library_x86 = "OpenSteamTool.GameHook.x86.dll"
+
+[cloud]
+# Optional Steam Cloud save redirection for unlocked ("lua") games, powered by
+# CloudRedirect (https://github.com/Selectively11/CloudRedirect).
+# When enabled, OpenSteamTool loads cloud_redirect.dll inside Steam, registers
+# every addappid() game as a redirected app, and routes their Steam Cloud RPCs
+# through CloudRedirect's cloud-save engine.
+#
+# Provider sign-in (Google Drive / OneDrive / local folder) is still done through
+# CloudRedirect's own companion app — OpenSteamTool only hosts the DLL.
+enabled = true
+# Path to cloud_redirect.dll. Absolute, or relative to the Steam root directory.
+# Defaults to "<Steam>/cloud_redirect.dll" when unset.
+# library = "cloud_redirect.dll"
+
 [remote]
-# Optional metadata mirror. Leave unset to use GitHub with jsDelivr fallback.
+# Optional metadata mirror. Leave unset to use gh-proxy with GitHub fallback.
 # A custom mirror replaces the built-in remote sources and must include all
 # three placeholders: {channel}, {component}, and {sha256}.
 #
+# Built-in mirror order (default: gh-proxy-first).
+#   "gh-proxy-first" → try gh-proxy first, fall back to GitHub raw
+#   "github-first"   → try GitHub raw first, fall back to gh-proxy
+# order = "gh-proxy-first"
+#
 # url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 # url_template = "https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml"
-
-[inject]
-# In-game payload injected by -onlinefix for games whose multiplayer runs on
-# EOS matchmaking instead of Steam. Set to false to disable the
-# payload entirely; the 480 AppId swap for Steam-matchmaking games still works.
-enabled = true
-
-[cloud]
-enabled = true
-
-[stats]
-# Query the official stats API when no Lua setStat override exists.
-# Priority: setStat > stats API > hardcoded preset SteamID.
-enable_api = true
